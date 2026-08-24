@@ -267,6 +267,12 @@
       <span class="tot-num" id="mgr-tot-num">0</span>
       <span class="tot-label">chefer totalt</span>
     </div>
+    <div class="tb-pill" id="customer-picker-wrap" title="Vilken kunds JSON-fil som exporteras/importeras">
+      <span style="font-size:13px;">🏢</span>
+      <input id="customer-input" list="customer-list" placeholder="Kund (t.ex. kund1)" autocomplete="off"
+        style="background:transparent; border:none; outline:none; color:var(--text); font-size:12px; font-family:inherit; width:110px;">
+      <datalist id="customer-list"></datalist>
+    </div>
     <div class="tb-divider"></div>
     <div class="tb-icon-btn" id="theme-toggle-btn" title="Växla tema">☀</div>
     <div class="tb-icon-btn" id="topbar-export-btn" title="Exportera / Spara JSON">↓</div>
@@ -955,13 +961,56 @@ document.getElementById('clear-btn').onclick = () => {
   people=[]; expanded=new Set(); refreshMgrSelect(); render(); renderFilterPanel(); markDirty();
 };
 
+// Kundväljare – styr vilket JSON-filnamn som exporteras/importeras
+const customerInput = document.getElementById('customer-input');
+const customerList = document.getElementById('customer-list');
+
+function slugify(s) {
+  return (s || '').trim().toLowerCase()
+    .replace(/[åä]/g, 'a').replace(/ö/g, 'o')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function getFilename() {
+  const slug = slugify(customerInput.value);
+  return slug ? `org-chart-data_${slug}.json` : 'org-chart-data.json';
+}
+
+function loadCustomerHistory() {
+  let hist = [];
+  try { hist = JSON.parse(localStorage.getItem('orgchart-customers') || '[]'); } catch(e) {}
+  customerList.innerHTML = '';
+  for (const c of hist) {
+    const o = document.createElement('option'); o.value = c; customerList.appendChild(o);
+  }
+  return hist;
+}
+
+function rememberCustomer(name) {
+  const slug = slugify(name);
+  if (!slug) return;
+  const hist = loadCustomerHistory();
+  if (!hist.includes(name.trim())) {
+    hist.push(name.trim());
+    localStorage.setItem('orgchart-customers', JSON.stringify(hist));
+    loadCustomerHistory();
+  }
+}
+
+customerInput.value = localStorage.getItem('orgchart-customer') || '';
+loadCustomerHistory();
+customerInput.addEventListener('change', () => {
+  localStorage.setItem('orgchart-customer', customerInput.value);
+  rememberCustomer(customerInput.value);
+});
+
 // Export JSON – sparar direkt till vald mapp via File System Access API
 let _dirHandle = null;
 
 async function exportJSON() {
   const data = JSON.stringify({ version: 2, exportedAt: new Date().toISOString(), people, expanded: [...expanded], consultants, sellerList, filterTags, fpOrgIds: [...fpOrgIds], fpOrgEnabled: [...fpOrgEnabled] }, null, 2);
   const blob = new Blob([data], { type: 'application/json' });
-  const filename = 'org-chart-data.json';
+  const filename = getFilename();
 
   // Försök med File System Access API (Chrome/Edge)
   if (window.showDirectoryPicker) {
@@ -998,7 +1047,7 @@ document.getElementById('topbar-export-btn').onclick = exportJSON;
 
 // Import JSON – läser direkt från vald mapp via File System Access API
 async function importJSON() {
-  const filename = 'org-chart-data.json';
+  const filename = getFilename();
 
   // Försök med File System Access API (Chrome/Edge)
   if (window.showDirectoryPicker) {
@@ -1028,7 +1077,7 @@ async function importJSON() {
       return;
     } catch(e) {
       if (e.name === 'AbortError') { setStatus('Avbruten'); return; }
-      if (e.name === 'NotFoundError') { setStatus('⚠ Hittade inte org-chart-data.json i mappen'); return; }
+      if (e.name === 'NotFoundError') { setStatus('⚠ Hittade inte ' + filename + ' i mappen'); return; }
       // Om något går fel, nollställ och fall tillbaka
       _dirHandle = null;
       setStatus('⚠ Kunde inte läsa från mapp – försöker vanlig filväljare');
