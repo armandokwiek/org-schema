@@ -288,8 +288,8 @@
     <div class="tb-icon-btn" id="customer-browse-btn" title="Bläddra bland kundfiler i mappen">📂</div>
     <div class="tb-divider"></div>
     <div class="tb-icon-btn" id="theme-toggle-btn" title="Växla tema">☀</div>
-    <div class="tb-icon-btn" id="topbar-export-btn" title="Exportera / Spara JSON">↓</div>
-    <div class="tb-icon-btn" id="topbar-import-btn" title="Importera JSON">↑</div>
+    <div class="tb-icon-btn" id="topbar-export-btn" title="Exportera / Spara JSON">💾</div>
+    <div class="tb-icon-btn" id="topbar-import-btn" title="Importera JSON">📂</div>
     <div class="tb-icon-btn tb-icon-btn-accent" id="add-person-btn" title="Lägg till person">+</div>
   </div>
 </div>
@@ -305,6 +305,7 @@
       <div id="zoom-level">100%</div>
       <div class="ctrl-btn" id="zoom-in" title="Zoom in">+</div>
       <div class="ctrl-btn" id="fit-btn" title="Fit to screen" style="font-size:13px">⊞</div>
+      <div class="ctrl-btn" id="expand-collapse-all-btn" title="Maximera alla">⊕</div>
     </div>
     <div id="settings-controls">
       <div class="ctrl-btn" id="settings-btn" title="Inställningar">⚙</div>
@@ -455,8 +456,8 @@
     <div id="stab-data" class="stab-content" style="flex:1; overflow-y:auto; padding:12px 16px; display:none; flex-direction:column; gap:10px;">
       <div class="share-label">Share</div>
       <div class="share-btns">
-        <button id="export-btn">↓ SPARA</button>
-        <button id="import-btn">↑ Import JSON</button>
+        <button id="export-btn">💾 SPARA</button>
+        <button id="import-btn">📂 Import JSON</button>
       </div>
       <button id="clear-btn" style="padding:8px; font-size:12px; font-weight:600; border-radius:var(--radius); border:0.5px solid var(--border-strong); background:var(--surface2); color:var(--text); cursor:pointer; font-family:inherit;">Clear all</button>
       <div id="save-status"></div>
@@ -757,7 +758,24 @@ function render() {
   renderUnknownPanel();
   applyTagHighlights();
   if (fpSellerActive || fpTagActive || fpOrgEnabled.size > 0) applyFilterPanelHighlights();
+  updateExpandAllIcon();
 }
+
+function updateExpandAllIcon() {
+  const btn = document.getElementById('expand-collapse-all-btn');
+  if (!btn) return;
+  const allExpandable = people.filter(p => !isLeafNode(p.id)).map(p => p.id);
+  const allAreExpanded = allExpandable.length > 0 && allExpandable.every(id => expanded.has(id));
+  btn.textContent = allAreExpanded ? '⊖' : '⊕';
+  btn.title = allAreExpanded ? 'Minimera alla' : 'Maximera alla';
+}
+
+document.getElementById('expand-collapse-all-btn').onclick = () => {
+  const allExpandable = people.filter(p => !isLeafNode(p.id)).map(p => p.id);
+  const allAreExpanded = allExpandable.length > 0 && allExpandable.every(id => expanded.has(id));
+  if (allAreExpanded) { expanded.clear(); } else { allExpandable.forEach(id => expanded.add(id)); }
+  render(); fitView(); saveData();
+};
 
 function renderUnknownPanel() {
   const unknownPeople = people.filter(p => p.mgr === '__unknown__');
@@ -1012,9 +1030,17 @@ function rememberCustomer(name) {
 
 customerInput.value = localStorage.getItem('orgchart-customer') || '';
 loadCustomerHistory();
-customerInput.addEventListener('change', () => {
+customerInput.addEventListener('keydown', e => { if (e.key === 'Enter') customerInput.blur(); });
+customerInput.addEventListener('change', async () => {
+  const prevVal = localStorage.getItem('orgchart-customer') || '';
+  if (customerInput.value === prevVal) return;
+  if (isDirty && !confirm('Du har osparade ändringar. Byta kund ändå utan att spara dem?')) {
+    customerInput.value = prevVal;
+    return;
+  }
   localStorage.setItem('orgchart-customer', customerInput.value);
   rememberCustomer(customerInput.value);
+  await importJSON();
 });
 
 // ── IndexedDB – kom ihåg vald mapp (FileSystemDirectoryHandle) mellan sessioner ──
