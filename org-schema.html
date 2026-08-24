@@ -237,12 +237,24 @@
   border-radius: 8px; padding: 10px 28px; font-size: 0.9rem; cursor: pointer; width: 100%;
 }
 #startup-skip-btn:hover { color: #aab; border-color: #556; }
+#startup-file-list { max-height: 260px; overflow-y: auto; margin: 0 0 14px; display: flex; flex-direction: column; gap: 6px; }
+.startup-file-btn {
+  background: #26344a; color: #dde; border: 1px solid #334; border-radius: 8px;
+  padding: 10px 16px; font-size: 0.9rem; cursor: pointer; width: 100%; text-align: left;
+}
+.startup-file-btn:hover { background: #30425c; border-color: #4a9eff; }
+#startup-changefolder-btn {
+  background: none; border: none; color: #6a9eff; font-size: 0.8rem; cursor: pointer;
+  margin-bottom: 10px; text-decoration: underline; padding: 0;
+}
 </style>
 
 <div id="startup-overlay">
   <div id="startup-box">
     <h2>📂 Ladda org-schema</h2>
-    <p>Välj din synkade OneDrive-mapp för att ladda senaste datan. Du kan hoppa över detta och använda inbyggd data.</p>
+    <p id="startup-desc">Välj din synkade OneDrive-mapp för att ladda senaste datan. Du kan hoppa över detta och använda inbyggd data.</p>
+    <div id="startup-file-list" style="display:none;"></div>
+    <button id="startup-changefolder-btn" style="display:none;">Välj en annan mapp</button>
     <button id="startup-pick-btn">Välj OneDrive-mapp</button>
     <button id="startup-skip-btn">Hoppa över</button>
   </div>
@@ -273,6 +285,7 @@
         style="background:transparent; border:none; outline:none; color:var(--text); font-size:12px; font-family:inherit; width:110px;">
       <datalist id="customer-list"></datalist>
     </div>
+    <div class="tb-icon-btn" id="customer-browse-btn" title="Bläddra bland kundfiler i mappen">📂</div>
     <div class="tb-divider"></div>
     <div class="tb-icon-btn" id="theme-toggle-btn" title="Växla tema">☀</div>
     <div class="tb-icon-btn" id="topbar-export-btn" title="Exportera / Spara JSON">↓</div>
@@ -1004,8 +1017,70 @@ customerInput.addEventListener('change', () => {
   rememberCustomer(customerInput.value);
 });
 
+// ── IndexedDB – kom ihåg vald mapp (FileSystemDirectoryHandle) mellan sessioner ──
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('orgchart-db', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('handles');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function idbGet(key) {
+  try {
+    const db = await idbOpen();
+    return await new Promise((resolve, reject) => {
+      const req = db.transaction('handles', 'readonly').objectStore('handles').get(key);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch(e) { return null; }
+}
+async function idbSet(key, val) {
+  try {
+    const db = await idbOpen();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('handles', 'readwrite');
+      tx.objectStore('handles').put(val, key);
+      tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
+    });
+  } catch(e) {}
+}
+
+// ── Skanna mappen efter org-chart-data(_kund).json-filer ──
+async function scanCustomerFiles(dirHandle) {
+  const files = [];
+  for await (const [name, handle] of dirHandle.entries()) {
+    if (handle.kind !== 'file' || !/\.json$/i.test(name)) continue;
+    if (/^org-chart-data\.json$/i.test(name)) {
+      files.push({ filename: name, slug: '', label: 'Standard (ingen kund)' });
+    } else {
+      const m = name.match(/^org-chart-data_(.+)\.json$/i);
+      if (m) files.push({ filename: name, slug: m[1], label: m[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) });
+    }
+  }
+  files.sort((a, b) => a.label.localeCompare(b.label, 'sv'));
+  return files;
+}
+
 // Export JSON – sparar direkt till vald mapp via File System Access API
 let _dirHandle = null;
+
+async function ensureDirHandle() {
+  if (_dirHandle) return _dirHandle;
+  const stored = await idbGet('dirHandle');
+  if (stored) {
+    try {
+      let perm = await stored.queryPermission({ mode: 'readwrite' });
+      if (perm !== 'granted') perm = await stored.requestPermission({ mode: 'readwrite' });
+      if (perm === 'granted') { _dirHandle = stored; return _dirHandle; }
+    } catch(e) {}
+  }
+  setStatus('Välj din OneDrive-mapp…');
+  _dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+  await idbSet('dirHandle', _dirHandle);
+  return _dirHandle;
+}
 
 async function exportJSON() {
   const data = JSON.stringify({ version: 2, exportedAt: new Date().toISOString(), people, expanded: [...expanded], consultants, sellerList, filterTags, fpOrgIds: [...fpOrgIds], fpOrgEnabled: [...fpOrgEnabled] }, null, 2);
@@ -1015,16 +1090,12 @@ async function exportJSON() {
   // Försök med File System Access API (Chrome/Edge)
   if (window.showDirectoryPicker) {
     try {
-      // Återanvänd sparad mapp om möjligt, annars be användaren välja
-      if (!_dirHandle) {
-        setStatus('Välj din OneDrive-mapp…');
-        _dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-      }
-      const fileHandle = await _dirHandle.getFileHandle(filename, { create: true });
+      const dh = await ensureDirHandle();
+      const fileHandle = await dh.getFileHandle(filename, { create: true });
       const writable = await fileHandle.createWritable();
       await writable.write(blob);
       await writable.close();
-      setStatus('✓ Sparad till ' + _dirHandle.name + '/' + filename); clearDirty();
+      setStatus('✓ Sparad till ' + dh.name + '/' + filename); clearDirty();
       return;
     } catch(e) {
       if (e.name === 'AbortError') { setStatus('Avbruten'); return; }
@@ -1045,6 +1116,31 @@ async function exportJSON() {
 document.getElementById('export-btn').onclick = exportJSON;
 document.getElementById('topbar-export-btn').onclick = exportJSON;
 
+// Tolkar och applicerar en inläst JSON-textsträng på org-schemat
+function applyImportedData(text) {
+  const d = JSON.parse(text);
+  if (!d.people || !Array.isArray(d.people)) throw new Error('Invalid format');
+  people = d.people; expanded = new Set(d.expanded || []); consultants = d.consultants || {};
+  sellerList = []; initSellerList(d.sellerList || null);
+  filterTags = d.filterTags && d.filterTags.length ? d.filterTags : [...DEFAULT_FILTER_TAGS];
+  fpOrgIds     = new Set((d.fpOrgIds     || []).map(Number));
+  fpOrgEnabled = new Set((d.fpOrgEnabled || []).map(Number));
+  buildSellerColorMap();
+  refreshSellerSelect();
+  ensureTagsField();
+  refreshMgrSelect(); render(); renderFilterPanel(); fitView(); saveData(); clearDirty();
+}
+
+// Läser en fil ur mappen (via fileHandle) och applicerar den
+async function importFileHandle(fileHandle) {
+  const file = await fileHandle.getFile();
+  const text = await file.text();
+  try {
+    applyImportedData(text);
+    setStatus('✓ Importerad – ' + people.length + ' personer');
+  } catch(err) { setStatus('⚠ Ogiltig fil'); }
+}
+
 // Import JSON – läser direkt från vald mapp via File System Access API
 async function importJSON() {
   const filename = getFilename();
@@ -1052,28 +1148,9 @@ async function importJSON() {
   // Försök med File System Access API (Chrome/Edge)
   if (window.showDirectoryPicker) {
     try {
-      // Återanvänd sparad mapp om möjligt, annars be användaren välja
-      if (!_dirHandle) {
-        setStatus('Välj din OneDrive-mapp…');
-        _dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-      }
-      const fileHandle = await _dirHandle.getFileHandle(filename);
-      const file = await fileHandle.getFile();
-      const text = await file.text();
-      try {
-        const d = JSON.parse(text);
-        if (!d.people || !Array.isArray(d.people)) throw new Error('Invalid format');
-        people = d.people; expanded = new Set(d.expanded || []); consultants = d.consultants || {};
-        sellerList = []; initSellerList(d.sellerList || null);
-        filterTags = d.filterTags && d.filterTags.length ? d.filterTags : [...DEFAULT_FILTER_TAGS];
-        fpOrgIds     = new Set((d.fpOrgIds     || []).map(Number));
-        fpOrgEnabled = new Set((d.fpOrgEnabled || []).map(Number));
-        buildSellerColorMap();
-        refreshSellerSelect();
-        ensureTagsField();
-        refreshMgrSelect(); render(); renderFilterPanel(); fitView(); saveData(); clearDirty();
-        setStatus('✓ Importerad – ' + people.length + ' personer');
-      } catch(err) { setStatus('⚠ Ogiltig fil'); }
+      const dh = await ensureDirHandle();
+      const fileHandle = await dh.getFileHandle(filename);
+      await importFileHandle(fileHandle);
       return;
     } catch(e) {
       if (e.name === 'AbortError') { setStatus('Avbruten'); return; }
@@ -1090,6 +1167,17 @@ async function importJSON() {
 
 document.getElementById('import-btn').onclick = importJSON;
 document.getElementById('topbar-import-btn').onclick = importJSON;
+
+// Bläddra bland kundfiler i mappen (topbar-knapp) – återanvänder startup-overlayn
+document.getElementById('customer-browse-btn').onclick = async () => {
+  try {
+    const dh = await ensureDirHandle();
+    await showFileListOverlay(dh, { allowSkip: true, skipLabel: 'Stäng' });
+  } catch(e) {
+    if (e.name !== 'AbortError') setStatus('⚠ Kunde inte öppna mappen');
+  }
+};
+
 document.getElementById('file-input').addEventListener('change', e => {
   const file = e.target.files[0]; if(!file) return;
   const reader = new FileReader();
@@ -1770,7 +1858,70 @@ document.getElementById('settings-tag-add').addEventListener('click', () => {
 document.getElementById('settings-tag-inp').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('settings-tag-add').click(); });
 // ─────────────────────────────────────────────────────────────────
 
-// ── Startup: visa dialog för att välja mapp ───────────────────
+// ── Visar startup-overlayn som en lista över kundfiler i vald mapp ──
+async function showFileListOverlay(dirHandle, opts) {
+  opts = opts || {};
+  const overlay   = document.getElementById('startup-overlay');
+  const descEl    = document.getElementById('startup-desc');
+  const listEl    = document.getElementById('startup-file-list');
+  const pickBtn   = document.getElementById('startup-pick-btn');
+  const skipBtn   = document.getElementById('startup-skip-btn');
+  const changeBtn = document.getElementById('startup-changefolder-btn');
+
+  overlay.style.display = 'flex';
+  descEl.textContent = 'Kundfiler i "' + dirHandle.name + '":';
+  pickBtn.style.display = 'none';
+  changeBtn.style.display = 'block';
+  skipBtn.textContent = opts.skipLabel || 'Hoppa över';
+  skipBtn.style.display = opts.allowSkip === false ? 'none' : 'block';
+
+  const files = await scanCustomerFiles(dirHandle);
+  listEl.style.display = 'flex';
+  listEl.innerHTML = '';
+  if (!files.length) {
+    const p = document.createElement('div');
+    p.style.cssText = 'color:#aab; font-size:0.85rem; margin-bottom:6px;';
+    p.textContent = 'Inga org-chart-data-filer hittades i mappen ännu. Skriv ett kundnamn i kundfältet uppe till höger och exportera för att skapa en ny.';
+    listEl.appendChild(p);
+  } else {
+    files.forEach(f => {
+      const btn = document.createElement('button');
+      btn.className = 'startup-file-btn';
+      btn.textContent = f.label;
+      btn.onclick = async () => {
+        customerInput.value = f.slug;
+        localStorage.setItem('orgchart-customer', f.slug);
+        if (f.slug) rememberCustomer(f.slug);
+        try {
+          const fh = await dirHandle.getFileHandle(f.filename);
+          await importFileHandle(fh);
+        } catch(e) { setStatus('⚠ Kunde inte läsa filen'); }
+        overlay.style.display = 'none';
+      };
+      listEl.appendChild(btn);
+    });
+  }
+
+  changeBtn.onclick = async () => {
+    try {
+      const dh = await window.showDirectoryPicker({ mode: 'readwrite' });
+      await idbSet('dirHandle', dh);
+      _dirHandle = dh;
+      await showFileListOverlay(dh, opts);
+    } catch(e) {
+      if (e.name !== 'AbortError') setStatus('⚠ Kunde inte öppna mappen');
+    }
+  };
+
+  skipBtn.onclick = () => {
+    overlay.style.display = 'none';
+    listEl.style.display = 'none';
+    pickBtn.style.display = 'block';
+    changeBtn.style.display = 'none';
+  };
+}
+
+// ── Startup: visa dialog för att välja mapp och lista kundfiler ──
 async function startup() {
   people      = [];
   expanded    = new Set();
@@ -1785,25 +1936,55 @@ async function startup() {
   if (people.length > 0) setTimeout(fitView, 80);
   clearDirty();
 
-  // Visa startup-overlay
   const overlay = document.getElementById('startup-overlay');
+  const descEl  = document.getElementById('startup-desc');
+  const pickBtn = document.getElementById('startup-pick-btn');
   overlay.style.display = 'flex';
 
-  document.getElementById('startup-pick-btn').onclick = async () => {
+  async function pickNewFolder() {
     try {
-      _dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-      overlay.style.display = 'none';
-      await importJSON();
+      const dh = await window.showDirectoryPicker({ mode: 'readwrite' });
+      await idbSet('dirHandle', dh);
+      _dirHandle = dh;
+      await showFileListOverlay(dh, { allowSkip: true, skipLabel: 'Hoppa över' });
     } catch(e) {
       if (e.name !== 'AbortError') setStatus('⚠ Kunde inte öppna mappen');
       overlay.style.display = 'none';
     }
-  };
+  }
+  pickBtn.onclick = pickNewFolder;
 
   document.getElementById('startup-skip-btn').onclick = () => {
     overlay.style.display = 'none';
     setStatus('Inget schema laddat – importera JSON för att börja');
   };
+
+  // Försök återansluta automatiskt till tidigare vald mapp (kräver ingen ny mappdialog)
+  const stored = window.showDirectoryPicker ? await idbGet('dirHandle') : null;
+  if (stored) {
+    try {
+      const perm = await stored.queryPermission({ mode: 'readwrite' });
+      if (perm === 'granted') {
+        _dirHandle = stored;
+        await showFileListOverlay(stored, { allowSkip: true, skipLabel: 'Hoppa över' });
+        return;
+      }
+      descEl.textContent = 'Tidigare vald mapp: "' + stored.name + '". Klicka för att ansluta igen.';
+      pickBtn.textContent = 'Anslut till ' + stored.name;
+      pickBtn.onclick = async () => {
+        try {
+          const p = await stored.requestPermission({ mode: 'readwrite' });
+          if (p !== 'granted') throw new Error('denied');
+          _dirHandle = stored;
+          await showFileListOverlay(stored, { allowSkip: true, skipLabel: 'Hoppa över' });
+        } catch(e) {
+          setStatus('⚠ Kunde inte ansluta – välj en mapp manuellt');
+          pickBtn.textContent = 'Välj OneDrive-mapp';
+          pickBtn.onclick = pickNewFolder;
+        }
+      };
+    } catch(e) {}
+  }
 }
 
 startup();
