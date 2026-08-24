@@ -1875,10 +1875,17 @@ async function showFileListOverlay(dirHandle, opts) {
   skipBtn.textContent = opts.skipLabel || 'Hoppa över';
   skipBtn.style.display = opts.allowSkip === false ? 'none' : 'block';
 
-  const files = await scanCustomerFiles(dirHandle);
+  let files = [], scanError = null;
+  try { files = await scanCustomerFiles(dirHandle); } catch(e) { scanError = e; }
+
   listEl.style.display = 'flex';
   listEl.innerHTML = '';
-  if (!files.length) {
+  if (scanError) {
+    const p = document.createElement('div');
+    p.style.cssText = 'color:#ff9a9a; font-size:0.85rem; margin-bottom:6px;';
+    p.textContent = '⚠ Kunde inte läsa mappen (' + (scanError.name || 'fel') + '): ' + (scanError.message || scanError);
+    listEl.appendChild(p);
+  } else if (!files.length) {
     const p = document.createElement('div');
     p.style.cssText = 'color:#aab; font-size:0.85rem; margin-bottom:6px;';
     p.textContent = 'Inga org-chart-data-filer hittades i mappen ännu. Skriv ett kundnamn i kundfältet uppe till höger och exportera för att skapa en ny.';
@@ -1909,7 +1916,7 @@ async function showFileListOverlay(dirHandle, opts) {
       _dirHandle = dh;
       await showFileListOverlay(dh, opts);
     } catch(e) {
-      if (e.name !== 'AbortError') setStatus('⚠ Kunde inte öppna mappen');
+      if (e.name !== 'AbortError') setStatus('⚠ Kunde inte öppna mappen (' + e.name + '): ' + e.message);
     }
   };
 
@@ -1948,7 +1955,7 @@ async function startup() {
       _dirHandle = dh;
       await showFileListOverlay(dh, { allowSkip: true, skipLabel: 'Hoppa över' });
     } catch(e) {
-      if (e.name !== 'AbortError') setStatus('⚠ Kunde inte öppna mappen');
+      if (e.name !== 'AbortError') setStatus('⚠ Kunde inte öppna mappen (' + e.name + '): ' + e.message);
       overlay.style.display = 'none';
     }
   }
