@@ -260,11 +260,7 @@
   </div>
 </div>
 <div id="topbar">
-  <div class="tb-pill" id="org-totals" style="display:none">
-    <span class="tot-icon">👥</span>
-    <span class="tot-num" id="tot-num">0</span>
-    <span class="tot-label">konsulter totalt</span>
-  </div>
+  <div id="org-title" style="font-weight:600; font-size:15px; color:var(--text); white-space:nowrap;">Organisationsschema</div>
   <div id="search-bar">
     <span style="font-size:13px; color:var(--text3);">🔍</span>
     <input id="search-inp" placeholder="Filtrera" autocomplete="off" />
@@ -275,6 +271,11 @@
     </div>
   </div>
   <div style="display:flex; align-items:center; gap:10px;">
+    <div class="tb-pill" id="org-totals" style="display:none">
+      <span class="tot-icon">👥</span>
+      <span class="tot-num" id="tot-num">0</span>
+      <span class="tot-label">konsulter totalt</span>
+    </div>
     <div class="tb-pill" id="managers-total" style="display:none">
       <span class="tot-num" id="mgr-tot-num">0</span>
       <span class="tot-label">chefer totalt</span>
@@ -289,7 +290,6 @@
     <div class="tb-divider"></div>
     <div class="tb-icon-btn" id="theme-toggle-btn" title="Växla tema">☀</div>
     <div class="tb-icon-btn" id="topbar-export-btn" title="Exportera / Spara JSON">💾</div>
-    <div class="tb-icon-btn" id="topbar-import-btn" title="Importera JSON">📂</div>
     <div class="tb-icon-btn tb-icon-btn-accent" id="add-person-btn" title="Lägg till person">+</div>
   </div>
 </div>
@@ -1028,18 +1028,29 @@ function rememberCustomer(name) {
   }
 }
 
+function updateOrgTitle() {
+  const raw = customerInput.value.trim();
+  const titleEl = document.getElementById('org-title');
+  if (!raw) { titleEl.textContent = 'Organisationsschema'; return; }
+  const label = raw.replace(/\s+/g, ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  titleEl.textContent = label + ' Organisationsschema';
+}
+
 customerInput.value = localStorage.getItem('orgchart-customer') || '';
 loadCustomerHistory();
+updateOrgTitle();
 customerInput.addEventListener('keydown', e => { if (e.key === 'Enter') customerInput.blur(); });
 customerInput.addEventListener('change', async () => {
   const prevVal = localStorage.getItem('orgchart-customer') || '';
   if (customerInput.value === prevVal) return;
   if (isDirty && !confirm('Du har osparade ändringar. Byta kund ändå utan att spara dem?')) {
     customerInput.value = prevVal;
+    updateOrgTitle();
     return;
   }
   localStorage.setItem('orgchart-customer', customerInput.value);
   rememberCustomer(customerInput.value);
+  updateOrgTitle();
   await importJSON();
 });
 
@@ -1192,7 +1203,6 @@ async function importJSON() {
 }
 
 document.getElementById('import-btn').onclick = importJSON;
-document.getElementById('topbar-import-btn').onclick = importJSON;
 
 // Bläddra bland kundfiler i mappen (topbar-knapp) – återanvänder startup-overlayn
 document.getElementById('customer-browse-btn').onclick = async () => {
@@ -1925,6 +1935,7 @@ async function showFileListOverlay(dirHandle, opts) {
         customerInput.value = f.slug;
         localStorage.setItem('orgchart-customer', f.slug);
         if (f.slug) rememberCustomer(f.slug);
+        updateOrgTitle();
         try {
           const fh = await dirHandle.getFileHandle(f.filename);
           await importFileHandle(fh);
