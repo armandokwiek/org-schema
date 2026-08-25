@@ -705,7 +705,7 @@ function render() {
         `<div class="n-name">${esc(p.name)}</div>` +
         (p.sub?`<div class="n-sub">${esc(p.sub)}</div>`:'') +
         (p.title?`<span class="n-title">${esc(p.title)}</span>`:'') +
-        (p.seller?(()=>{ const sc=getSellerColor(p.seller); const ss=sc?` style="background:${sc.bg};color:${sc.text}"`:''; return `<span class="n-seller"${ss}>◈ ${esc(p.seller)}</span>`; })():'') +
+        (p.seller?(()=>{ const sc=getSellerColor(p.seller); const ss=sc?` style="background:${safeColor(sc.bg)};color:${safeColor(sc.text)}"`:''; return `<span class="n-seller"${ss}>◈ ${esc(p.seller)}</span>`; })():'') +
       `</div>` +
       (!isLeaf && ch.length?`<div class="n-expand">${isExp?'▾ '+ch.length+' report'+(ch.length>1?'s':''):'▸ '+ch.length+' below'}</div>`:'');
     // Consultant button
@@ -799,7 +799,7 @@ function renderUnknownPanel() {
       `<div style="min-width:0;flex:1">` +
         `<div class="n-name">${esc(p.name)}</div>` +
         (p.sub?`<div class="n-sub">${esc(p.sub)}</div>`:'') +
-        (p.seller?(()=>{ const sc=getSellerColor(p.seller); const ss=sc?` style="background:${sc.bg};color:${sc.text}"`:''; return `<span class="n-seller"${ss}>◈ ${esc(p.seller)}</span>`; })():'') +
+        (p.seller?(()=>{ const sc=getSellerColor(p.seller); const ss=sc?` style="background:${safeColor(sc.bg)};color:${safeColor(sc.text)}"`:''; return `<span class="n-seller"${ss}>◈ ${esc(p.seller)}</span>`; })():'') +
       `</div>`;
     const cBtn = document.createElement('button');
     cBtn.className = 'consult-btn' + (hasC ? ' has-consultants' : '');
@@ -826,6 +826,10 @@ function renderUnknownPanel() {
 }
 
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// Validerar att ett färgvärde (t.ex. från importerad JSON) faktiskt är en ofarlig CSS-färg
+// innan det skrivs in i ett style-attribut, så att en manipulerad JSON-fil inte kan bryta
+// ut ur attributet och köra egen JS.
+function safeColor(c) { return /^#[0-9a-fA-F]{3,8}$|^[a-zA-Z]+$|^rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)$/.test(c || '') ? c : '#888888'; }
 
 function showTooltip(p, e) {
   const ch = getChildren(p.id), mgr = (p.mgr!=null)?people.find(x=>x.id===p.mgr):null;
@@ -1534,7 +1538,7 @@ function renderFilterPanel() {
     const count = people.filter(p => p.seller === seller).length;
     const item = document.createElement('div');
     item.className = 'fp-seller-item' + (fpSellerActive === seller ? ' active' : '');
-    item.innerHTML = `<span class="fp-seller-dot" style="background:${sc ? sc.text : 'var(--text3)'}"></span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(seller)}</span><span style="font-size:10px;color:var(--text3);flex-shrink:0;">${count}</span>`;
+    item.innerHTML = `<span class="fp-seller-dot" style="background:${sc ? safeColor(sc.text) : 'var(--text3)'}"></span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(seller)}</span><span style="font-size:10px;color:var(--text3);flex-shrink:0;">${count}</span>`;
     item.addEventListener('click', () => {
       fpSellerActive = (fpSellerActive === seller) ? null : seller;
       fpTagActive = null;
@@ -1807,7 +1811,7 @@ function renderSettingsSellerList() {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--surface2);border-radius:8px;';
     const swatch = document.createElement('div');
-    swatch.style.cssText = `width:14px;height:14px;border-radius:50%;background:${s.bg};border:1.5px solid ${s.text};flex-shrink:0;`;
+    swatch.style.cssText = `width:14px;height:14px;border-radius:50%;background:${safeColor(s.bg)};border:1.5px solid ${safeColor(s.text)};flex-shrink:0;`;
     const nameEl = document.createElement('span');
     nameEl.style.cssText = 'flex:1;font-size:12px;font-weight:500;color:var(--text);';
     nameEl.textContent = s.name;
