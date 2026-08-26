@@ -134,6 +134,9 @@
   .cm-item-del { background:none; border:none; color:var(--text3); cursor:pointer; font-size:13px; padding:0 2px; line-height:1; }
   .cm-item-del:hover { color:var(--danger); }
   .cm-empty { font-size:12px; color:var(--text3); text-align:center; padding:18px 0; }
+  .ac-row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; padding:6px 0; font-size:12px; color:var(--text); border-bottom:0.5px solid var(--border); }
+  .ac-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ac-row .ac-mgr, .ac-row .ac-org { color:var(--text2); }
 
   /* ── Tags ─────────────────────────────────────────────────────── */
   .tag-dot { position:absolute; top:6px; right:26px; width:7px; height:7px; border-radius:50%; background:var(--tag); z-index:2; pointer-events:none; }
@@ -271,7 +274,7 @@
     </div>
   </div>
   <div style="display:flex; align-items:center; gap:10px;">
-    <div class="tb-pill" id="org-totals" style="display:none">
+    <div class="tb-pill" id="org-totals" style="display:none; cursor:pointer;" title="Visa alla konsulter">
       <span class="tot-icon">👥</span>
       <span class="tot-num" id="tot-num">0</span>
       <span class="tot-label">konsulter totalt</span>
@@ -399,6 +402,26 @@
     <div style="padding:10px 16px 14px; border-top:0.5px solid var(--border); display:flex; gap:7px;">
       <input id="cm-inp" placeholder="Namn på konsult…" autocomplete="off" style="flex:1; font-size:12px; border:0.5px solid var(--border-strong); border-radius:8px; padding:7px 10px; background:var(--surface2); color:var(--text); outline:none; font-family:inherit;" />
       <button id="cm-add" style="padding:7px 13px; font-size:12px; font-weight:600; border-radius:8px; border:none; background:var(--accent-bg); color:var(--accent-text); cursor:pointer; font-family:inherit; white-space:nowrap;">+ Lägg till</button>
+    </div>
+  </div>
+</div>
+
+<!-- All Consultants Modal -->
+<div id="all-consultants-modal" style="display:none; position:fixed; inset:0; z-index:200; background:rgba(0,0,0,0.35); backdrop-filter:blur(2px); align-items:center; justify-content:center;">
+  <div id="ac-box" style="background:var(--surface); border:0.5px solid var(--border-strong); border-radius:14px; width:520px; max-width:92vw; max-height:80vh; display:flex; flex-direction:column; box-shadow:0 8px 40px rgba(0,0,0,0.18); overflow:hidden;">
+    <div style="padding:14px 16px 11px; border-bottom:0.5px solid var(--border); display:flex; align-items:center; justify-content:space-between;">
+      <div>
+        <div style="font-size:11px; color:var(--text3); font-weight:500; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:2px;">Alla konsulter</div>
+        <div id="ac-title" style="font-size:14px; font-weight:600; color:var(--text);"></div>
+      </div>
+      <button id="ac-close" style="background:var(--surface2); border:0.5px solid var(--border-strong); border-radius:6px; width:26px; height:26px; cursor:pointer; font-size:14px; color:var(--text2); display:flex; align-items:center; justify-content:center; line-height:1;">✕</button>
+    </div>
+    <div id="ac-list-head" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; padding:8px 16px; font-size:10px; font-weight:600; letter-spacing:0.03em; text-transform:uppercase; color:var(--text3); border-bottom:0.5px solid var(--border);">
+      <span>Konsult</span><span>Chef</span><span>Organisation</span>
+    </div>
+    <div id="ac-list" style="flex:1; overflow-y:auto; padding:6px 16px 10px; display:flex; flex-direction:column; gap:2px; min-height:60px;"></div>
+    <div style="padding:10px 16px 14px; border-top:0.5px solid var(--border); display:flex; justify-content:flex-end;">
+      <button id="ac-export" style="padding:7px 13px; font-size:12px; font-weight:600; border-radius:8px; border:none; background:var(--accent-bg); color:var(--accent-text); cursor:pointer; font-family:inherit; white-space:nowrap;">⬇ Exportera Excel</button>
     </div>
   </div>
 </div>
@@ -1287,6 +1310,93 @@ document.getElementById('cm-add').addEventListener('click', () => {
   document.getElementById('cm-inp').focus();
 });
 document.getElementById('cm-inp').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('cm-add').click(); });
+// ─────────────────────────────────────────────────────────────────
+
+// ── All consultants (popup + Excel export) ─────────────────────────
+function getRootName(id) {
+  let cur = people.find(x => x.id === id);
+  if (!cur) return 'Okänd';
+  while (cur && cur.mgr !== null && cur.mgr !== undefined && cur.mgr !== '__unknown__') {
+    const next = people.find(x => x.id === cur.mgr);
+    if (!next) break;
+    cur = next;
+  }
+  if (!cur || cur.mgr === '__unknown__') return 'Okänd';
+  return cur.name;
+}
+
+function getAllConsultantRows() {
+  const rows = [];
+  Object.keys(consultants).forEach(mgrId => {
+    const mgr = people.find(x => x.id === Number(mgrId));
+    const mgrName = mgr ? mgr.name : 'Okänd';
+    const orgName = mgr ? getRootName(mgr.id) : 'Okänd';
+    (consultants[mgrId] || []).forEach(name => rows.push({ name, mgrName, orgName }));
+  });
+  rows.sort((a, b) => a.name.localeCompare(b.name, 'sv'));
+  return rows;
+}
+
+const allConsultantsModal = document.getElementById('all-consultants-modal');
+
+function openAllConsultantsModal() {
+  const rows = getAllConsultantRows();
+  document.getElementById('ac-title').textContent = rows.length + ' konsult' + (rows.length === 1 ? '' : 'er');
+  const list = document.getElementById('ac-list');
+  list.innerHTML = '';
+  if (!rows.length) {
+    list.innerHTML = '<div class="cm-empty">Inga konsulter tillagda ännu.</div>';
+  } else {
+    rows.forEach(r => {
+      const row = document.createElement('div');
+      row.className = 'ac-row';
+      row.innerHTML = `<span title="${esc(r.name)}">${esc(r.name)}</span><span class="ac-mgr" title="${esc(r.mgrName)}">${esc(r.mgrName)}</span><span class="ac-org" title="${esc(r.orgName)}">${esc(r.orgName)}</span>`;
+      list.appendChild(row);
+    });
+  }
+  allConsultantsModal.style.display = 'flex';
+}
+
+document.getElementById('org-totals').addEventListener('click', openAllConsultantsModal);
+document.getElementById('ac-close').addEventListener('click', () => { allConsultantsModal.style.display = 'none'; });
+allConsultantsModal.addEventListener('click', e => { if (e.target === allConsultantsModal) allConsultantsModal.style.display = 'none'; });
+
+function exportConsultantsExcel() {
+  const rows = getAllConsultantRows();
+  const xmlRows = rows.map(r =>
+    `<Row><Cell><Data ss:Type="String">${esc(r.name)}</Data></Cell><Cell><Data ss:Type="String">${esc(r.mgrName)}</Data></Cell><Cell><Data ss:Type="String">${esc(r.orgName)}</Data></Cell></Row>`
+  ).join('');
+  const xml = `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Styles>
+  <Style ss:ID="Header"><Font ss:Bold="1"/><Interior ss:Color="#E1F4F1" ss:Pattern="Solid"/></Style>
+ </Styles>
+ <Worksheet ss:Name="Konsulter">
+  <Table>
+   <Column ss:Width="160"/><Column ss:Width="160"/><Column ss:Width="160"/>
+   <Row>
+    <Cell ss:StyleID="Header"><Data ss:Type="String">Konsult</Data></Cell>
+    <Cell ss:StyleID="Header"><Data ss:Type="String">Chef</Data></Cell>
+    <Cell ss:StyleID="Header"><Data ss:Type="String">Organisation</Data></Cell>
+   </Row>
+   ${xmlRows}
+  </Table>
+ </Worksheet>
+</Workbook>`;
+  const blob = new Blob([xml], { type: 'application/vnd.ms-excel' });
+  const slug = slugify(customerInput.value);
+  const filename = 'konsulter' + (slug ? `_${slug}` : '') + '.xls';
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  a.click(); URL.revokeObjectURL(url);
+}
+
+document.getElementById('ac-export').addEventListener('click', exportConsultantsExcel);
 // ─────────────────────────────────────────────────────────────────
 
 // ── Tags ─────────────────────────────────────────────────────────
