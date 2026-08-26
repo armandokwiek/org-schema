@@ -39,6 +39,14 @@
   body { display: flex; flex-direction: column; }
   #topbar { height: 58px; flex-shrink: 0; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 0 16px; background: var(--surface); border-bottom: 0.5px solid var(--border); }
   .tb-pill { display: flex; align-items: center; gap: 8px; background: var(--surface2); border: 0.5px solid var(--border-strong); border-radius: 20px; padding: 6px 14px; font-size: 12px; color: var(--text2); white-space: nowrap; }
+  #org-totals { transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease; }
+  #org-totals:hover { background: var(--accent-bg); border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.14); animation: org-totals-pulse 1s ease-in-out infinite; }
+  #org-totals:hover .tot-label { color: var(--accent-text); }
+  #org-totals:active { transform: translateY(0); }
+  @keyframes org-totals-pulse {
+    0%, 100% { box-shadow: 0 2px 8px rgba(0,0,0,0.14), 0 0 0 0 rgba(83,74,183,0.0); }
+    50%       { box-shadow: 0 2px 8px rgba(0,0,0,0.14), 0 0 0 4px rgba(83,74,183,0.18); }
+  }
   .tb-pill .tot-num { font-size: 15px; font-weight: 700; color: var(--accent); }
   .tb-pill .tot-label { font-size: 11px; color: var(--text3); }
   .tb-warn-pill { display: flex; align-items: center; gap: 8px; border: 1px solid rgba(163,45,45,0.35); border-radius: 20px; padding: 6px 14px; background: rgba(163,45,45,0.08); color: var(--danger); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
@@ -1325,12 +1333,20 @@ function getRootName(id) {
   return cur.name;
 }
 
+// Sektionsnamnet är personens eget "Sub-org / Team"-fält; saknas det
+// används rot-organisationens namn som reservvärde.
+function getOrgName(mgr) {
+  if (!mgr) return 'Okänd';
+  if (mgr.sub && mgr.sub.trim()) return mgr.sub.trim();
+  return getRootName(mgr.id);
+}
+
 function getAllConsultantRows() {
   const rows = [];
   Object.keys(consultants).forEach(mgrId => {
     const mgr = people.find(x => x.id === Number(mgrId));
     const mgrName = mgr ? mgr.name : 'Okänd';
-    const orgName = mgr ? getRootName(mgr.id) : 'Okänd';
+    const orgName = getOrgName(mgr);
     (consultants[mgrId] || []).forEach(name => rows.push({ name, mgrName, orgName }));
   });
   rows.sort((a, b) => a.name.localeCompare(b.name, 'sv'));
@@ -1361,35 +1377,105 @@ document.getElementById('org-totals').addEventListener('click', openAllConsultan
 document.getElementById('ac-close').addEventListener('click', () => { allConsultantsModal.style.display = 'none'; });
 allConsultantsModal.addEventListener('click', e => { if (e.target === allConsultantsModal) allConsultantsModal.style.display = 'none'; });
 
+// ── Minimal ZIP writer (store/no compression) för att bygga en riktig .xlsx ──
+const CRC32_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes) {
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) crc = CRC32_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+function makeZip(files) {
+  const encoder = new TextEncoder();
+  const localParts = [], centralParts = [];
+  let offset = 0;
+  files.forEach(f => {
+    const nameBytes = encoder.encode(f.name);
+    const data = encoder.encode(f.content);
+    const crc = crc32(data), size = data.length;
+
+    const local = new Uint8Array(30 + nameBytes.length);
+    const dv = new DataView(local.buffer);
+    dv.setUint32(0, 0x04034b50, true); dv.setUint16(4, 20, true); dv.setUint16(6, 0, true);
+    dv.setUint16(8, 0, true); dv.setUint16(10, 0, true); dv.setUint16(12, 0x21, true);
+    dv.setUint32(14, crc, true); dv.setUint32(18, size, true); dv.setUint32(22, size, true);
+    dv.setUint16(26, nameBytes.length, true); dv.setUint16(28, 0, true);
+    local.set(nameBytes, 30);
+    localParts.push(local, data);
+
+    const central = new Uint8Array(46 + nameBytes.length);
+    const cdv = new DataView(central.buffer);
+    cdv.setUint32(0, 0x02014b50, true); cdv.setUint16(4, 20, true); cdv.setUint16(6, 20, true);
+    cdv.setUint16(8, 0, true); cdv.setUint16(10, 0, true); cdv.setUint16(12, 0, true); cdv.setUint16(14, 0x21, true);
+    cdv.setUint32(16, crc, true); cdv.setUint32(20, size, true); cdv.setUint32(24, size, true);
+    cdv.setUint16(28, nameBytes.length, true); cdv.setUint16(30, 0, true); cdv.setUint16(32, 0, true);
+    cdv.setUint16(34, 0, true); cdv.setUint16(36, 0, true); cdv.setUint32(38, 0, true);
+    cdv.setUint32(42, offset, true);
+    central.set(nameBytes, 46);
+    centralParts.push(central);
+
+    offset += local.length + data.length;
+  });
+
+  const centralStart = offset;
+  const centralSize = centralParts.reduce((s, c) => s + c.length, 0);
+
+  const eocd = new Uint8Array(22);
+  const edv = new DataView(eocd.buffer);
+  edv.setUint32(0, 0x06054b50, true); edv.setUint16(4, 0, true); edv.setUint16(6, 0, true);
+  edv.setUint16(8, files.length, true); edv.setUint16(10, files.length, true);
+  edv.setUint32(12, centralSize, true); edv.setUint32(16, centralStart, true); edv.setUint16(20, 0, true);
+
+  return new Blob([...localParts, ...centralParts, eocd], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
 function exportConsultantsExcel() {
   const rows = getAllConsultantRows();
-  const xmlRows = rows.map(r =>
-    `<Row><Cell><Data ss:Type="String">${esc(r.name)}</Data></Cell><Cell><Data ss:Type="String">${esc(r.mgrName)}</Data></Cell><Cell><Data ss:Type="String">${esc(r.orgName)}</Data></Cell></Row>`
-  ).join('');
-  const xml = `<?xml version="1.0"?>
-<?mso-application progid="Excel.Sheet"?>
-<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
- xmlns:o="urn:schemas-microsoft-com:office:office"
- xmlns:x="urn:schemas-microsoft-com:office:excel"
- xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
- <Styles>
-  <Style ss:ID="Header"><Font ss:Bold="1"/><Interior ss:Color="#E1F4F1" ss:Pattern="Solid"/></Style>
- </Styles>
- <Worksheet ss:Name="Konsulter">
-  <Table>
-   <Column ss:Width="160"/><Column ss:Width="160"/><Column ss:Width="160"/>
-   <Row>
-    <Cell ss:StyleID="Header"><Data ss:Type="String">Konsult</Data></Cell>
-    <Cell ss:StyleID="Header"><Data ss:Type="String">Chef</Data></Cell>
-    <Cell ss:StyleID="Header"><Data ss:Type="String">Organisation</Data></Cell>
-   </Row>
-   ${xmlRows}
-  </Table>
- </Worksheet>
-</Workbook>`;
-  const blob = new Blob([xml], { type: 'application/vnd.ms-excel' });
+  const xmlEsc = s => esc(s);
+  const dataRows = rows.map((r, i) => {
+    const rn = i + 2;
+    const cell = (col, val) => `<c r="${col}${rn}" t="inlineStr"><is><t xml:space="preserve">${xmlEsc(val)}</t></is></c>`;
+    return `<row r="${rn}">${cell('A', r.name)}${cell('B', r.mgrName)}${cell('C', r.orgName)}</row>`;
+  }).join('');
+
+  const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols><col min="1" max="3" width="26" customWidth="1"/></cols><sheetData><row r="1"><c r="A1" t="inlineStr" s="1"><is><t>Konsult</t></is></c><c r="B1" t="inlineStr" s="1"><is><t>Chef</t></is></c><c r="C1" t="inlineStr" s="1"><is><t>Organisation</t></is></c></row>${dataRows}</sheetData></worksheet>`;
+
+  const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs></styleSheet>`;
+
+  const workbookXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Konsulter" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+
+  const workbookRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+
+  const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
+
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
+
+  const blob = makeZip([
+    { name: '[Content_Types].xml', content: contentTypes },
+    { name: '_rels/.rels', content: rootRels },
+    { name: 'xl/workbook.xml', content: workbookXml },
+    { name: 'xl/_rels/workbook.xml.rels', content: workbookRels },
+    { name: 'xl/styles.xml', content: stylesXml },
+    { name: 'xl/worksheets/sheet1.xml', content: sheetXml },
+  ]);
+
   const slug = slugify(customerInput.value);
-  const filename = 'konsulter' + (slug ? `_${slug}` : '') + '.xls';
+  const filename = 'konsulter' + (slug ? `_${slug}` : '') + '.xlsx';
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = filename;
