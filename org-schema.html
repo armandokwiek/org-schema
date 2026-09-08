@@ -1,3 +1,4 @@
+<!-- org-schema.html — build 2026-09-08d: includes (1) view-anchor-on-toggle fix and (2) root-hiding-on-filter fix. If you don't see this comment when viewing page source, you're on an old file. -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -642,6 +643,48 @@ function buildChildrenMap() {
 function getChildren(id) { return childrenMap.get(id) || []; }
 function getRoots() { return people.filter(p => p.mgr === null || p.mgr === undefined || p.mgr === ''); }
 
+// ── Filter matching (shared by layout + highlighting) ──────────────
+// Returns null when no filter is active, otherwise the Set of person ids
+// that match ALL currently active filters (org AND seller AND tag).
+function getActiveFilterMatchIds() {
+  const hasOrg    = fpOrgEnabled.size > 0;
+  const hasSeller = !!fpSellerActive;
+  const hasTag    = !!fpTagActive;
+  if (!hasOrg && !hasSeller && !hasTag) return null;
+
+  let orgMatchIds = null;
+  if (hasOrg) {
+    orgMatchIds = new Set();
+    fpOrgEnabled.forEach(oid => { getSubtreeIds(oid).forEach(id => orgMatchIds.add(id)); });
+  }
+  let sellerMatchIds = null;
+  if (hasSeller) sellerMatchIds = new Set(people.filter(p => p.seller === fpSellerActive).map(p => p.id));
+  let tagMatchIds = null;
+  if (hasTag) tagMatchIds = new Set(people.filter(p => (p.tags||[]).includes(fpTagActive)).map(p => p.id));
+
+  return new Set(people.map(p => p.id).filter(id => {
+    if (orgMatchIds    && !orgMatchIds.has(id))    return false;
+    if (sellerMatchIds && !sellerMatchIds.has(id)) return false;
+    if (tagMatchIds    && !tagMatchIds.has(id))    return false;
+    return true;
+  }));
+}
+
+// Roots to actually lay out on the canvas: when a filter is active, a root
+// is only shown if its own subtree contains at least one matching person —
+// every other root (and its whole branch) is left out of the layout
+// entirely, so it disappears instead of just being dimmed.
+function getVisibleRoots() {
+  const roots = getRoots();
+  const matchIds = getActiveFilterMatchIds();
+  if (!matchIds) return roots;
+  return roots.filter(r => {
+    const subtree = getSubtreeIds(r.id);
+    for (const id of subtree) if (matchIds.has(id)) return true;
+    return false;
+  });
+}
+
 const LEAF_H = 90, LEAF_GAP = 14;
 
 function isLeafNode(id) { return getChildren(id).length === 0; }
@@ -680,7 +723,7 @@ function computeLayout() {
       cursor += sw + H_GAP;
     }
   }
-  place(getRoots(), 0, 0);
+  place(getVisibleRoots(), 0, 0);
   return pos;
 }
 
@@ -896,7 +939,7 @@ document.getElementById('ctx-org-filter').onclick = () => {
   buildChildrenMap();
   function expandSubtree(id) { expanded.add(id); getChildren(id).forEach(c => expandSubtree(c.id)); }
   fpOrgIds.forEach(id => expandSubtree(id));
-  render(); renderFilterPanel();
+  render(); renderFilterPanel(); fitView();
   // Öppna filter-panelen om den är kollapsad
   const fp = document.getElementById('filter-panel');
   fp.classList.remove('collapsed');
@@ -957,7 +1000,27 @@ function removePerson(id) {
   refreshMgrSelect(); render(); renderFilterPanel(); markDirty();
 }
 
-function toggleExpand(id) { expanded.has(id)?collapseSubtree(id):expanded.add(id); render(); saveData(); }
+function toggleExpand(id) {
+  // Anchor the clicked node's on-screen position so the view doesn't jump
+  // when the layout reflows (expanding/collapsing changes subtree widths,
+  // which shifts sibling branches horizontally).
+  const beforeEl = canvasEl.querySelector(`.org-node[data-id="${id}"]`);
+  const beforeRect = beforeEl ? beforeEl.getBoundingClientRect() : null;
+
+  expanded.has(id) ? collapseSubtree(id) : expanded.add(id);
+  render();
+
+  if (beforeRect) {
+    const afterEl = canvasEl.querySelector(`.org-node[data-id="${id}"]`);
+    if (afterEl) {
+      const afterRect = afterEl.getBoundingClientRect();
+      tx += beforeRect.left - afterRect.left;
+      ty += beforeRect.top - afterRect.top;
+      applyTransform();
+    }
+  }
+  saveData();
+}
 function collapseSubtree(id) { expanded.delete(id); getChildren(id).forEach(c=>collapseSubtree(c.id)); }
 
 function applyTransform() {
@@ -1699,10 +1762,12 @@ function renderFilterPanel() {
           buildChildrenMap();
           function expandSub(id) { expanded.add(id); getChildren(id).forEach(c => expandSub(c.id)); }
           expandSub(oid);
-          render();
         }
+        // Rita om (icke-matchande rötter göms/visas helt om), sen anpassa vyn
+        render();
         renderFilterPanel();
         applyFilterPanelHighlights();
+        fitView();
       });
       const delBtn = document.createElement('button');
       delBtn.className = 'fp-org-del';
@@ -1712,8 +1777,10 @@ function renderFilterPanel() {
         e.stopPropagation();
         fpOrgIds.delete(oid);
         fpOrgEnabled.delete(oid);
+        render();
         renderFilterPanel();
         applyFilterPanelHighlights();
+        fitView();
         markDirty();
       });
       item.appendChild(delBtn);
@@ -1738,8 +1805,10 @@ function renderFilterPanel() {
     item.addEventListener('click', () => {
       fpSellerActive = (fpSellerActive === seller) ? null : seller;
       fpTagActive = null;
+      render();
       renderFilterPanel();
       applyFilterPanelHighlights();
+      fitView();
     });
     sellerListEl.appendChild(item);
   });
@@ -1767,11 +1836,11 @@ function renderFilterPanel() {
             cur = par ? par.mgr : null;
           }
         });
-        render();
-      } else {
-        renderFilterPanel();
-        applyFilterPanelHighlights();
       }
+      render();
+      renderFilterPanel();
+      applyFilterPanelHighlights();
+      fitView();
     });
     tagList.appendChild(item);
   });
@@ -1789,30 +1858,8 @@ function applyFilterPanelHighlights() {
   const hasTag    = !!fpTagActive;
   if (!hasOrg && !hasSeller && !hasTag) { if (fpCount) fpCount.textContent = ''; return; }
 
-  // Bygg matchmängd per filtertyp, kombinera sedan med AND
-  let orgMatchIds = null;
-  if (hasOrg) {
-    buildChildrenMap();
-    orgMatchIds = new Set();
-    fpOrgEnabled.forEach(oid => { getSubtreeIds(oid).forEach(id => orgMatchIds.add(id)); });
-  }
-  let sellerMatchIds = null;
-  if (hasSeller) {
-    sellerMatchIds = new Set(people.filter(p => p.seller === fpSellerActive).map(p => p.id));
-  }
-  let tagMatchIds = null;
-  if (hasTag) {
-    tagMatchIds = new Set(people.filter(p => (p.tags||[]).includes(fpTagActive)).map(p => p.id));
-  }
-
-  // AND: en nod måste matcha alla aktiva filtertyper
-  const allMatchIds = new Set(people.map(p => p.id).filter(id => {
-    if (orgMatchIds    && !orgMatchIds.has(id))    return false;
-    if (sellerMatchIds && !sellerMatchIds.has(id)) return false;
-    if (tagMatchIds    && !tagMatchIds.has(id))    return false;
-    return true;
-  }));
-
+  buildChildrenMap();
+  const allMatchIds = getActiveFilterMatchIds() || new Set();
   if (fpCount) fpCount.textContent = allMatchIds.size ? `(${allMatchIds.size})` : '';
 
   people.forEach(p => {
@@ -1848,7 +1895,7 @@ document.getElementById('filter-panel-header').addEventListener('click', () => {
 document.getElementById('filter-panel').addEventListener('wheel', e => { e.stopPropagation(); }, { passive: true });
 document.getElementById('fp-clear-btn').addEventListener('click', () => {
   fpSellerActive = null; fpTagActive = null; fpOrgIds.clear(); fpOrgEnabled.clear();
-  renderFilterPanel(); applyFilterPanelHighlights();
+  render(); renderFilterPanel(); applyFilterPanelHighlights(); fitView();
 });
 // ─────────────────────────────────────────────────────────────────
 
