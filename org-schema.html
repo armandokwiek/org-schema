@@ -470,6 +470,7 @@
     <div id="settings-tabs" style="display:flex; border-bottom:0.5px solid var(--border); flex-shrink:0;">
       <button class="stab stab-active" data-tab="sellers" style="flex:1; padding:9px; font-size:12px; font-weight:600; border:none; border-bottom:2.5px solid var(--accent); background:none; color:var(--accent-text); cursor:pointer; font-family:inherit;">Säljare</button>
       <button class="stab" data-tab="filtertags" style="flex:1; padding:9px; font-size:12px; font-weight:600; border:none; border-bottom:2.5px solid transparent; background:none; color:var(--text2); cursor:pointer; font-family:inherit;">Filter-taggar</button>
+      <button class="stab" data-tab="layout" style="flex:1; padding:9px; font-size:12px; font-weight:600; border:none; border-bottom:2.5px solid transparent; background:none; color:var(--text2); cursor:pointer; font-family:inherit;">Layout</button>
       <button class="stab" data-tab="data" style="flex:1; padding:9px; font-size:12px; font-weight:600; border:none; border-bottom:2.5px solid transparent; background:none; color:var(--text2); cursor:pointer; font-family:inherit;">Data</button>
     </div>
     <div id="stab-sellers" class="stab-content" style="flex:1; overflow-y:auto; padding:12px 16px; display:flex; flex-direction:column; gap:5px;">
@@ -486,6 +487,18 @@
       <div style="display:flex; gap:7px; margin-top:6px; padding-top:10px; border-top:0.5px solid var(--border); align-items:center;">
         <input id="settings-tag-inp" placeholder="Ny tag…" autocomplete="off" style="flex:1; font-size:12px; border:0.5px solid var(--border-strong); border-radius:8px; padding:7px 10px; background:var(--surface2); color:var(--text); outline:none; font-family:inherit;" />
         <button id="settings-tag-add" style="padding:7px 12px; font-size:12px; font-weight:600; border-radius:8px; border:none; background:var(--tag-bg); color:var(--tag-text); cursor:pointer; font-family:inherit; white-space:nowrap;">+ Lägg till</button>
+      </div>
+    </div>
+    <div id="stab-layout" class="stab-content" style="flex:1; overflow-y:auto; padding:12px 16px; display:none; flex-direction:column; gap:10px;">
+      <div style="font-size:11px; color:var(--text3); margin-bottom:2px;">
+        Chefer med minst så här många direkta rapporter visas som ett rutnät (3 kolumner) istället för i rad.
+      </div>
+      <div style="display:flex; align-items:center; gap:12px;">
+        <input type="range" id="settings-grid-min" min="3" max="15" step="1" style="flex:1; accent-color:var(--accent);" />
+        <div id="settings-grid-min-val" style="font-size:13px; font-weight:700; color:var(--accent-text); background:var(--accent-bg); border-radius:8px; padding:4px 10px; min-width:28px; text-align:center;">9</div>
+      </div>
+      <div style="display:flex; justify-content:space-between; font-size:10px; color:var(--text3);">
+        <span>3 (fler rutnät)</span><span>15 (färre rutnät)</span>
       </div>
     </div>
     <div id="stab-data" class="stab-content" style="flex:1; overflow-y:auto; padding:12px 16px; display:none; flex-direction:column; gap:10px;">
@@ -694,7 +707,9 @@ const LEAF_H = 90, LEAF_GAP = 14;
 // Expanderar man en av rutorna i nätet hamnar INTE dess undergren i cellen
 // (då skulle raderna bli ojämna) — istället flyttas den ner till en egen
 // sektion under hela rutnätet, en grupp per expanderad chef i nätet.
-const GRID_MIN = 9, GRID_COLS = 3, DETACH_GAP = V_GAP + 40, GROUP_GAP = H_GAP * 3;
+const GRID_COLS = 3, DETACH_GAP = V_GAP + 40, GROUP_GAP = H_GAP * 3;
+let GRID_MIN = clampGridMin(parseInt(localStorage.getItem('orgchart-grid-min'), 10));
+function clampGridMin(n) { return Math.min(15, Math.max(3, Number.isFinite(n) ? n : 9)); }
 
 function isLeafNode(id) { return getChildren(id).length === 0; }
 
@@ -2137,8 +2152,20 @@ document.getElementById('settings-btn').addEventListener('click', e => {
   settingsModal.style.display = 'flex';
   renderSettingsSellerList();
   renderSettingsTagList();
+  gridMinSlider.value = GRID_MIN;
+  document.getElementById('settings-grid-min-val').textContent = GRID_MIN;
   activateSettingsTab('sellers');
 });
+
+// ── Layout: rutnäts-tröskel (GRID_MIN) ──────────────────────────────
+const gridMinSlider = document.getElementById('settings-grid-min');
+gridMinSlider.addEventListener('input', () => {
+  GRID_MIN = clampGridMin(parseInt(gridMinSlider.value, 10));
+  document.getElementById('settings-grid-min-val').textContent = GRID_MIN;
+  localStorage.setItem('orgchart-grid-min', GRID_MIN);
+  render();
+});
+// ─────────────────────────────────────────────────────────────────
 
 document.getElementById('settings-close').addEventListener('click', () => { settingsModal.style.display = 'none'; });
 settingsModal.addEventListener('click', e => { if (e.target === settingsModal) settingsModal.style.display = 'none'; });
