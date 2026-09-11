@@ -759,9 +759,9 @@ function gridBottomRow(children) {
   const expandedUpper = upper.filter(c => expanded.has(c.id) && getChildren(c.id).length);
   const leftCount = Math.floor(expandedUpper.length / 2);
   const items = [
-    ...expandedUpper.slice(0, leftCount).map(c => ({ id: c.id, dup: true })),
+    ...expandedUpper.slice(0, leftCount).map(c => ({ id: c.id, dup: true, side: 'left' })),
     ...lastRow.map(c => ({ id: c.id, dup: false })),
-    ...expandedUpper.slice(leftCount).map(c => ({ id: c.id, dup: true })),
+    ...expandedUpper.slice(leftCount).map(c => ({ id: c.id, dup: true, side: 'right' })),
   ];
   return { cols, rows, upper, items };
 }
@@ -815,7 +815,7 @@ function computeLayout() {
     items.forEach((it, i) => {
       const sw = widths[i];
       const nodeX = cursor + sw / 2 - NODE_W / 2;
-      if (it.dup) duplicates.push({ id: it.id, x: nodeX, y: lastRowY });
+      if (it.dup) duplicates.push({ id: it.id, x: nodeX, y: lastRowY, side: it.side, gridLeft: gridX0, gridRight: gridX0 + gridWidth });
       else pos[it.id] = { x: nodeX, y: lastRowY };
       if (expanded.has(it.id) && getChildren(it.id).length) placeChildrenBand(getChildren(it.id), cursor, lastRowY + NODE_H + V_GAP, sw);
       cursor += sw + H_GAP;
@@ -882,12 +882,20 @@ function render() {
     if (maxX > minX) drawLine(`M${minX},${busY} L${maxX},${busY}`); // tvärbalk
     g.children.forEach(c => drawLine(`M${c.x},${busY} L${c.x},${c.y}`)); // droppar
   });
-  // Streckad linje från originalrutan i nätet till dess kopia i sista raden,
-  // så det syns tydligt vilken kopia som hör till vilken chef.
+  // Streckad linje från originalrutan i nätet till dess kopia i sista raden.
+  // Går runt rutnätet (upp i mellanrummet ovanför originalets rad, ut till
+  // en sida av nätet, ner till kopians rad) istället för rakt genom andra
+  // rutor, så det syns tydligt vilken kopia som hör till vilken chef.
+  const DUP_GAP = 12, DUP_SIDE_PAD = 16;
   duplicates.forEach(dup => {
     const orig = pos[dup.id]; if (!orig) return;
-    const x1 = orig.x + NODE_W/2, y1 = orig.y + NODE_H, x2 = dup.x + NODE_W/2, y2 = dup.y;
-    drawLine(`M${x1},${y1} L${x2},${y2}`, true);
+    const origX = orig.x + NODE_W/2, origTopY = orig.y - DUP_GAP;
+    const dupX = dup.x + NODE_W/2, dupTopY = dup.y - DUP_GAP;
+    const channelX = dup.side === 'left' ? dup.gridLeft - DUP_SIDE_PAD : dup.gridRight + DUP_SIDE_PAD;
+    drawLine(
+      `M${origX},${orig.y} L${origX},${origTopY} L${channelX},${origTopY} L${channelX},${dupTopY} L${dupX},${dupTopY} L${dupX},${dup.y}`,
+      true
+    );
   });
   let maxX = 0, maxY = 0;
   for (const p of people) {
