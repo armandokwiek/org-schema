@@ -866,10 +866,11 @@ function render() {
     if (!lineGroups.has(par)) lineGroups.set(par, { x: par.x + NODE_W/2, y: par.y + NODE_H, children: [] });
     lineGroups.get(par).children.push({ x: pp.x + NODE_W/2, y: pp.y });
   }
-  function drawLine(d) {
+  function drawLine(d, dashed) {
     const path = document.createElementNS('http://www.w3.org/2000/svg','path');
     path.setAttribute('d', d);
     path.setAttribute('fill','none'); path.setAttribute('stroke','var(--border-strong)'); path.setAttribute('stroke-width','1');
+    if (dashed) path.setAttribute('stroke-dasharray', '4 3');
     linesEl.appendChild(path);
   }
   lineGroups.forEach(g => {
@@ -880,6 +881,13 @@ function render() {
     drawLine(`M${g.x},${g.y} L${g.x},${busY}`); // stam
     if (maxX > minX) drawLine(`M${minX},${busY} L${maxX},${busY}`); // tvärbalk
     g.children.forEach(c => drawLine(`M${c.x},${busY} L${c.x},${c.y}`)); // droppar
+  });
+  // Streckad linje från originalrutan i nätet till dess kopia i sista raden,
+  // så det syns tydligt vilken kopia som hör till vilken chef.
+  duplicates.forEach(dup => {
+    const orig = pos[dup.id]; if (!orig) return;
+    const x1 = orig.x + NODE_W/2, y1 = orig.y + NODE_H, x2 = dup.x + NODE_W/2, y2 = dup.y;
+    drawLine(`M${x1},${y1} L${x2},${y2}`, true);
   });
   let maxX = 0, maxY = 0;
   for (const p of people) {
