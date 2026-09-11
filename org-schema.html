@@ -1108,17 +1108,22 @@ function removePerson(id) {
 }
 
 function toggleExpand(id) {
-  // Anchor the clicked node's on-screen position so the view doesn't jump
-  // when the layout reflows (expanding/collapsing changes subtree widths,
-  // which shifts sibling branches horizontally).
-  const beforeEl = canvasEl.querySelector(`.org-node[data-id="${id}"]`);
+  // Anchor on the PARENT's on-screen position, not the clicked node's own —
+  // toggling a node never moves its parent (the parent's position only
+  // depends on what's above/before it), whereas the node itself can jump
+  // far (e.g. a grid card that relocates to the grid's last row when
+  // expanded/collapsed). Anchoring on something that reliably stays put
+  // is what keeps the rest of the view still.
+  const p = people.find(x => x.id === id);
+  const anchorId = (p && p.mgr !== null && p.mgr !== undefined && p.mgr !== '__unknown__') ? p.mgr : id;
+  const beforeEl = canvasEl.querySelector(`.org-node[data-id="${anchorId}"]`);
   const beforeRect = beforeEl ? beforeEl.getBoundingClientRect() : null;
 
   expanded.has(id) ? collapseSubtree(id) : expanded.add(id);
   render();
 
   if (beforeRect) {
-    const afterEl = canvasEl.querySelector(`.org-node[data-id="${id}"]`);
+    const afterEl = canvasEl.querySelector(`.org-node[data-id="${anchorId}"]`);
     if (afterEl) {
       const afterRect = afterEl.getBoundingClientRect();
       tx += beforeRect.left - afterRect.left;
