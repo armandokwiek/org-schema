@@ -810,20 +810,22 @@ function computeLayout() {
   // Lägger ut `children` som ett GRID_COLS-rutnät centrerat i `bandWidth`.
   // Övre radernas rutor (upperCells) sitter kvar på sina fasta rad/kolumn-
   // platser — en tom cell där en flyttad chef satt lämnas bara tom. Sista
-  // raden (inkl. ev. nedflyttade chefer, se gridPack) läggs ut som en vanlig
-  // rad, med sin egen undergren direkt under varje ruta.
+  // raden delar samma vänsterkant (gridX0) som rutnätet ovanför istället för
+  // att centreras separat — då hamnar en flyttad chef rakt under sin egen
+  // kolumn (samma x som innan), och det är kortet som redan satt där (plus
+  // allt till höger om det) som skjuts åt sidan för att göra plats.
   function placeGrid(children, x0, y0, bandWidth) {
     const { cols, rows, upperCells, items } = gridPack(children);
     const gridWidth = cols * NODE_W + H_GAP * (cols - 1);
-    const gridX0 = x0 + bandWidth / 2 - gridWidth / 2;
+    const widths = items.map(it => subtreeWidth(it.id));
+    const rowWidth = widths.reduce((s, w) => s + w, 0) + H_GAP * (items.length - 1);
+    const gridX0 = x0 + bandWidth / 2 - Math.max(gridWidth, rowWidth) / 2;
     upperCells.forEach(cell => {
       pos[cell.id] = { x: gridX0 + cell.col * (NODE_W + H_GAP), y: y0 + cell.row * (NODE_H + V_GAP) };
     });
 
     const lastRowY = y0 + (rows - 1) * (NODE_H + V_GAP);
-    const widths = items.map(it => subtreeWidth(it.id));
-    const rowWidth = widths.reduce((s, w) => s + w, 0) + H_GAP * (items.length - 1);
-    let cursor = x0 + bandWidth / 2 - rowWidth / 2;
+    let cursor = gridX0;
     items.forEach((it, i) => {
       const sw = widths[i];
       pos[it.id] = { x: cursor + sw / 2 - NODE_W / 2, y: lastRowY };
