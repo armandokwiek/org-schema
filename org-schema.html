@@ -739,7 +739,14 @@ function childrenBandWidth(id) {
   if (ch.length >= GRID_MIN) {
     const { cols, items } = gridPack(ch);
     const gridWidth = cols * NODE_W + H_GAP * (cols - 1);
-    const rowWidth = items.reduce((s, it) => s + subtreeWidth(it.id), 0) + H_GAP * (items.length - 1);
+    // Sista radens rutor sitter på FASTA steg (som rutnätets övriga rader),
+    // oavsett hur bred en enskild rutas egen undergren är — den bredden
+    // behövs bara under just den rutan, inte bredvid den i samma rad. Bara
+    // om en rutas egen gren faktiskt sticker ut längre än nästa fasta steg
+    // behöver vi reservera extra plats åt hela raden.
+    const rowWidth = items.length
+      ? Math.max(...items.map((it, i) => i * (NODE_W + H_GAP) + subtreeWidth(it.id)))
+      : 0;
     return Math.max(gridWidth, rowWidth);
   }
   const allLeaves = ch.every(c => isLeafNode(c.id));
@@ -856,13 +863,18 @@ function computeLayout() {
     // egen undergren hänger då åt höger om rutan istället för centrerad
     // under den — ett medvetet val för att garantera att själva rutan alltid
     // hamnar rätt.
+    //
+    // Rutorna i sista raden placeras på FASTA steg (NODE_W+H_GAP), precis
+    // som i rutnätets övre rader — INTE förskjutna av hur bred en enskild
+    // rutas egen undergren är. Den bredden gäller bara utrymmet DIREKT
+    // UNDER just den rutan; grannarna i samma rad behöver bara flytta sig
+    // ett steg åt gången, inte hela den bredden.
     const lastRowY = y0 + (rows - 1) * (NODE_H + V_GAP);
-    let cursor = gridX0;
     items.forEach((it, i) => {
+      const cursor = gridX0 + i * (NODE_W + H_GAP);
       const sw = widths[i];
       pos[it.id] = { x: cursor, y: lastRowY };
       if (expanded.has(it.id) && getChildren(it.id).length) placeChildrenBand(getChildren(it.id), cursor, lastRowY + NODE_H + V_GAP, sw);
-      cursor += sw + H_GAP;
     });
   }
 
