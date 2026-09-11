@@ -315,10 +315,10 @@
       <span class="tot-num" id="grid-min-val" style="font-size:13px;">9</span>
     </div>
     <div class="tb-divider"></div>
-    <div class="tb-icon-btn" id="info-toggle-btn" title="Visa/dölj info-panel">ℹ</div>
     <div class="tb-icon-btn" id="theme-toggle-btn" title="Växla tema">☀</div>
     <div class="tb-icon-btn" id="topbar-export-btn" title="Exportera / Spara JSON">💾</div>
     <div class="tb-icon-btn tb-icon-btn-accent" id="add-person-btn" title="Lägg till person">+</div>
+    <div class="tb-icon-btn" id="info-toggle-btn" title="Visa/dölj info-panel">ℹ</div>
   </div>
 </div>
 <div id="app">
@@ -387,7 +387,7 @@
   </div>
 </div>
 
-<div id="info-panel">
+<div id="info-panel" class="open">
   <div style="padding:14px 16px 11px; border-bottom:0.5px solid var(--border); display:flex; align-items:center; justify-content:space-between; flex-shrink:0;">
     <h1 style="font-size:14px; font-weight:600; color:var(--text);">Info</h1>
     <button id="info-panel-close" style="background:var(--surface2); border:0.5px solid var(--border-strong); border-radius:6px; width:26px; height:26px; cursor:pointer; font-size:14px; color:var(--text2); display:flex; align-items:center; justify-content:center; line-height:1;">✕</button>
@@ -1009,8 +1009,7 @@ function render() {
         div.appendChild(badge);
       }
     }
-    if(!isLeaf) div.addEventListener('click', e => { e.stopPropagation(); toggleExpand(p.id); });
-    div.addEventListener('click', e => { e.stopPropagation(); selectPerson(p.id); });
+    div.addEventListener('click', e => { e.stopPropagation(); handleNodeClick(p.id); });
     div.addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); showCtxMenu(p.id, e); });
     div.addEventListener('mouseenter', e => showTooltip(p, e));
     div.addEventListener('mouseleave', () => { tooltip.style.opacity = '0'; });
@@ -1223,6 +1222,18 @@ function selectPerson(id) {
   renderInfoPanel();
 }
 
+// Klick på en ruta i org-trädet: väljer alltid personen. Men om INGET är
+// valt ännu och rutan redan är expanderad, ska klicket bara välja den —
+// inte minimera grenen under den (en oväntad kollaps på allra första
+// klicket). I alla andra fall expanderar/kollapsar det som vanligt.
+function handleNodeClick(id) {
+  const isFirstSelection = selectedPersonId === null;
+  const wasExpanded = expanded.has(id);
+  const isLeaf = getChildren(id).length === 0;
+  selectPerson(id);
+  if (!isLeaf && !(isFirstSelection && wasExpanded)) toggleExpand(id);
+}
+
 function renderInfoPanel() {
   const body = document.getElementById('info-panel-body');
   const p = selectedPersonId !== null ? people.find(x => x.id === selectedPersonId) : null;
@@ -1238,16 +1249,26 @@ function renderInfoPanel() {
     `<div class="info-row"><div class="info-label">Namn</div><div class="info-value" style="font-weight:600;">${esc(p.name)}</div></div>` +
     (p.title ? `<div class="info-row"><div class="info-label">Titel</div><div class="info-value">${esc(p.title)}</div></div>` : '') +
     (p.sub ? `<div class="info-row"><div class="info-label">Sub-org / Team</div><div class="info-value">${esc(p.sub)}</div></div>` : '') +
-    `<div class="info-row"><div class="info-label">Organisation</div><div class="info-value breadcrumb">${breadcrumb.map(esc).join(' / ')}</div></div>` +
+    `<div class="info-row"><div class="info-label">Organisation</div><div class="info-value breadcrumb">` +
+      breadcrumb.map((name, i) => `<div style="padding-left:${i * 12}px;">${i > 0 ? '↳ ' : ''}${esc(name)}</div>`).join('') +
+    `</div></div>` +
     (p.seller ? `<div class="info-row"><div class="info-label">Ansvarig säljare</div><div class="info-value">${esc(p.seller)}</div></div>` : '') +
     ((p.tags || []).length ? `<div class="info-row"><div class="info-label">Taggar</div><div class="info-value">${p.tags.map(esc).join(', ')}</div></div>` : '') +
     `<div class="info-row"><div class="info-label">Konsulter</div><div class="info-value">${cCount > 0 ? cCount : 'Inga'}</div></div>` +
     `<div class="info-row"><div class="info-label">Underordnade (${reports.length})</div>` +
     (reports.length
-      ? `<div class="info-list">${reports.map(c => `<div class="info-list-item">${esc(c.name)}${c.title ? ' · ' + esc(c.title) : ''}</div>`).join('')}</div>`
+      ? `<div class="info-list">${reports.map(c => `<div class="info-list-item" data-id="${c.id}">${esc(c.name)}${c.title ? ' · ' + esc(c.title) : ''}</div>`).join('')}</div>`
       : `<div class="info-empty">Inga underordnade</div>`) +
     `</div>`;
 }
+
+// Klick på ett namn i "Underordnade"-listan expanderar/väljer det precis
+// som ett klick på rutan i schemat (delegerat, listan byggs om varje gång).
+document.getElementById('info-panel-body').addEventListener('click', e => {
+  const item = e.target.closest('.info-list-item[data-id]');
+  if (!item) return;
+  handleNodeClick(Number(item.dataset.id));
+});
 
 document.getElementById('info-toggle-btn').addEventListener('click', () => { infoPanel.classList.toggle('open'); });
 document.getElementById('info-panel-close').addEventListener('click', () => { infoPanel.classList.remove('open'); });
