@@ -820,13 +820,13 @@ function computeLayout() {
 
   // Lägger ut `nodes` i en horisontell rad med start i (x0, y0); varje nods
   // egna gren (rad, vertikal stapel eller rutnät) hamnar under noden.
-  function place(nodes, x0, y0) {
+  function place(nodes, x0, y0, gap = H_GAP) {
     let cursor = x0;
     for (const n of nodes) {
       const sw = subtreeWidth(n.id);
       pos[n.id] = { x: cursor + centerWidth(n.id) / 2 - NODE_W / 2, y: y0 };
       if (expanded.has(n.id) && getChildren(n.id).length) placeChildrenBand(getChildren(n.id), cursor, y0 + NODE_H + V_GAP, sw);
-      cursor += sw + H_GAP;
+      cursor += sw + gap;
     }
   }
 
@@ -880,7 +880,9 @@ function computeLayout() {
     });
   }
 
-  place(getVisibleRoots(), 0, 0);
+  // Extra luft mellan separata rot-träd (1,5x vanligt mellanrum) så det syns
+  // tydligare var ett nytt träd börjar.
+  place(getVisibleRoots(), 0, 0, H_GAP * 1.5);
   return pos;
 }
 
