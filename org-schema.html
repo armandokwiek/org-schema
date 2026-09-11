@@ -857,9 +857,12 @@ function render() {
     const pp = pos[p.id]; if (!pp) continue;
     if (p.mgr !== null && p.mgr !== undefined) {
       const par = dupByMgr.get(p.mgr) || pos[p.mgr]; if (!par) continue;
-      const x1 = par.x + NODE_W/2, y1 = par.y + NODE_H, x2 = pp.x + NODE_W/2, y2 = pp.y, my = (y1+y2)/2;
+      const x1 = par.x + NODE_W/2, y1 = par.y + NODE_H, x2 = pp.x + NODE_W/2, y2 = pp.y;
+      // Böj bara ut ur föräldern (kort kurva ner till barnets x-position),
+      // resten av linjen ner till barnet är sedan helt rak.
+      const bendY = y1 + Math.min(28, (y2 - y1) / 2);
       const path = document.createElementNS('http://www.w3.org/2000/svg','path');
-      path.setAttribute('d',`M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`);
+      path.setAttribute('d',`M${x1},${y1} Q${x1},${bendY} ${x2},${bendY} L${x2},${y2}`);
       path.setAttribute('fill','none'); path.setAttribute('stroke','var(--border-strong)'); path.setAttribute('stroke-width','1');
       linesEl.appendChild(path);
     }
