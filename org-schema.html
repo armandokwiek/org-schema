@@ -855,26 +855,22 @@ function computeLayout() {
       pos[cell.id] = { x: gridX0 + cell.col * (NODE_W + H_GAP), y: y0 + cell.row * (NODE_H + V_GAP) };
     });
 
-    // OBS: här sätts varje rutas x till EXAKT `cursor` (inte centrerat inom
-    // sin reserverade bredd) — annars skulle en flyttad chef med en egen
-    // bred undergren (t.ex. ett eget nästlat rutnät) hamna en bit in i sitt
-    // reserverade utrymme istället för exakt på platsen den skulle ta
-    // (den vakanta platsen där den ruta som knuffas åt sidan satt). Chefens
-    // egen undergren hänger då åt höger om rutan istället för centrerad
-    // under den — ett medvetet val för att garantera att själva rutan alltid
-    // hamnar rätt.
-    //
     // Rutorna i sista raden placeras på FASTA steg (NODE_W+H_GAP), precis
     // som i rutnätets övre rader — INTE förskjutna av hur bred en enskild
-    // rutas egen undergren är. Den bredden gäller bara utrymmet DIREKT
+    // rutas egen undergren är (den bredden gäller bara utrymmet DIREKT
     // UNDER just den rutan; grannarna i samma rad behöver bara flytta sig
-    // ett steg åt gången, inte hela den bredden.
+    // ett steg åt gången). Rutans EGEN undergren centreras däremot precis
+    // som vanligt under rutan (kan alltså sticka ut åt båda hållen förbi
+    // grannarnas fasta steg om den är bred — se centrering nedan).
     const lastRowY = y0 + (rows - 1) * (NODE_H + V_GAP);
     items.forEach((it, i) => {
       const cursor = gridX0 + i * (NODE_W + H_GAP);
       const sw = widths[i];
       pos[it.id] = { x: cursor, y: lastRowY };
-      if (expanded.has(it.id) && getChildren(it.id).length) placeChildrenBand(getChildren(it.id), cursor, lastRowY + NODE_H + V_GAP, sw);
+      if (expanded.has(it.id) && getChildren(it.id).length) {
+        const childX0 = cursor - (sw - NODE_W) / 2;
+        placeChildrenBand(getChildren(it.id), childX0, lastRowY + NODE_H + V_GAP, sw);
+      }
     });
   }
 
