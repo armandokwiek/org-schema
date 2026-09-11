@@ -83,6 +83,15 @@
   .n-expand { font-size: 10px; color: var(--text3); margin-top: 4px; }
   #person-panel { position:fixed; top:58px; right:0; bottom:0; width:280px; background:var(--surface); border-left:0.5px solid var(--border); box-shadow:-4px 0 20px rgba(0,0,0,0.1); display:flex; flex-direction:column; transform:translateX(100%); transition:transform 0.2s ease; z-index:60; }
   #person-panel.open { transform:translateX(0); }
+  #info-panel { position:fixed; top:58px; left:0; bottom:0; width:280px; background:var(--surface); border-right:0.5px solid var(--border); box-shadow:4px 0 20px rgba(0,0,0,0.1); display:flex; flex-direction:column; transform:translateX(-100%); transition:transform 0.2s ease; z-index:60; }
+  #info-panel.open { transform:translateX(0); }
+  .info-row { margin-bottom: 12px; }
+  .info-label { font-size: 11px; color: var(--text2); margin-bottom: 4px; font-weight: 500; letter-spacing: 0.02em; text-transform: uppercase; }
+  .info-value { font-size: 13px; color: var(--text); line-height: 1.5; word-break: break-word; }
+  .info-value.breadcrumb { font-size: 12px; color: var(--text2); }
+  .info-list { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; }
+  .info-list-item { font-size: 12px; color: var(--text); padding: 6px 9px; background: var(--surface2); border-radius: 7px; }
+  .info-empty { font-size: 12px; color: var(--text3); }
   .field label { font-size: 11px; color: var(--text2); margin-bottom: 3px; display: block; font-weight: 500; letter-spacing: 0.02em; }
   .field input, .field select { font-size: 12px; width: 100%; border: 0.5px solid var(--border-strong); border-radius: var(--radius); padding: 7px 9px; background: var(--surface2); color: var(--text); outline: none; font-family: inherit; transition: border-color 0.12s; appearance: none; }
   .field input:focus, .field select:focus { border-color: var(--accent); background: var(--surface); }
@@ -306,6 +315,7 @@
       <span class="tot-num" id="grid-min-val" style="font-size:13px;">9</span>
     </div>
     <div class="tb-divider"></div>
+    <div class="tb-icon-btn" id="info-toggle-btn" title="Visa/dölj info-panel">ℹ</div>
     <div class="tb-icon-btn" id="theme-toggle-btn" title="Växla tema">☀</div>
     <div class="tb-icon-btn" id="topbar-export-btn" title="Exportera / Spara JSON">💾</div>
     <div class="tb-icon-btn tb-icon-btn-accent" id="add-person-btn" title="Lägg till person">+</div>
@@ -374,6 +384,16 @@
       <div class="tt-row" id="tt-mgr"></div>
       <div class="tt-row" id="tt-rep"></div>
     </div>
+  </div>
+</div>
+
+<div id="info-panel">
+  <div style="padding:14px 16px 11px; border-bottom:0.5px solid var(--border); display:flex; align-items:center; justify-content:space-between; flex-shrink:0;">
+    <h1 style="font-size:14px; font-weight:600; color:var(--text);">Info</h1>
+    <button id="info-panel-close" style="background:var(--surface2); border:0.5px solid var(--border-strong); border-radius:6px; width:26px; height:26px; cursor:pointer; font-size:14px; color:var(--text2); display:flex; align-items:center; justify-content:center; line-height:1;">✕</button>
+  </div>
+  <div id="info-panel-body" style="flex:1; overflow-y:auto; padding:14px 16px; display:flex; flex-direction:column; gap:2px;">
+    <div class="info-empty">Klicka på en chef i schemat för att se information här.</div>
   </div>
 </div>
 
@@ -990,6 +1010,7 @@ function render() {
       }
     }
     if(!isLeaf) div.addEventListener('click', e => { e.stopPropagation(); toggleExpand(p.id); });
+    div.addEventListener('click', e => { e.stopPropagation(); selectPerson(p.id); });
     div.addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); showCtxMenu(p.id, e); });
     div.addEventListener('mouseenter', e => showTooltip(p, e));
     div.addEventListener('mouseleave', () => { tooltip.style.opacity = '0'; });
@@ -1009,6 +1030,7 @@ function render() {
   applyTagHighlights();
   if (fpSellerActive || fpTagActive || fpOrgEnabled.size > 0) applyFilterPanelHighlights();
   updateExpandAllIcon();
+  renderInfoPanel();
 }
 
 function updateExpandAllIcon() {
@@ -1174,7 +1196,61 @@ function removePerson(id) {
   people = people.filter(x=>x.id!==id); expanded.delete(id);
   ch.forEach(c=>{ c.mgr=(p.mgr!=null)?p.mgr:null; });
   refreshMgrSelect(); render(); renderFilterPanel(); markDirty();
+  if (selectedPersonId === id) { selectedPersonId = null; renderInfoPanel(); }
 }
+
+// ── Info-panel: visar den senast klickade personen ─────────────────
+let selectedPersonId = null;
+const infoPanel = document.getElementById('info-panel');
+
+// Kedjan av organisationsnamn från roten ner till `id` — varje nivås
+// "Sub-org / Team"-fält om satt, annars personens namn som reserv.
+function getOrgBreadcrumb(id) {
+  const chain = [];
+  let cur = people.find(x => x.id === id);
+  while (cur) {
+    chain.unshift((cur.sub && cur.sub.trim()) ? cur.sub.trim() : cur.name);
+    if (cur.mgr === null || cur.mgr === undefined || cur.mgr === '__unknown__') break;
+    const next = people.find(x => x.id === cur.mgr);
+    if (!next) break;
+    cur = next;
+  }
+  return chain;
+}
+
+function selectPerson(id) {
+  selectedPersonId = id;
+  renderInfoPanel();
+}
+
+function renderInfoPanel() {
+  const body = document.getElementById('info-panel-body');
+  const p = selectedPersonId !== null ? people.find(x => x.id === selectedPersonId) : null;
+  if (!p) {
+    selectedPersonId = null;
+    body.innerHTML = '<div class="info-empty">Klicka på en chef i schemat för att se information här.</div>';
+    return;
+  }
+  const breadcrumb = getOrgBreadcrumb(p.id);
+  const reports = getChildren(p.id);
+  const cCount = (consultants[p.id] || []).length;
+  body.innerHTML =
+    `<div class="info-row"><div class="info-label">Namn</div><div class="info-value" style="font-weight:600;">${esc(p.name)}</div></div>` +
+    (p.title ? `<div class="info-row"><div class="info-label">Titel</div><div class="info-value">${esc(p.title)}</div></div>` : '') +
+    (p.sub ? `<div class="info-row"><div class="info-label">Sub-org / Team</div><div class="info-value">${esc(p.sub)}</div></div>` : '') +
+    `<div class="info-row"><div class="info-label">Organisation</div><div class="info-value breadcrumb">${breadcrumb.map(esc).join(' / ')}</div></div>` +
+    (p.seller ? `<div class="info-row"><div class="info-label">Ansvarig säljare</div><div class="info-value">${esc(p.seller)}</div></div>` : '') +
+    ((p.tags || []).length ? `<div class="info-row"><div class="info-label">Taggar</div><div class="info-value">${p.tags.map(esc).join(', ')}</div></div>` : '') +
+    `<div class="info-row"><div class="info-label">Konsulter</div><div class="info-value">${cCount > 0 ? cCount : 'Inga'}</div></div>` +
+    `<div class="info-row"><div class="info-label">Underordnade (${reports.length})</div>` +
+    (reports.length
+      ? `<div class="info-list">${reports.map(c => `<div class="info-list-item">${esc(c.name)}${c.title ? ' · ' + esc(c.title) : ''}</div>`).join('')}</div>`
+      : `<div class="info-empty">Inga underordnade</div>`) +
+    `</div>`;
+}
+
+document.getElementById('info-toggle-btn').addEventListener('click', () => { infoPanel.classList.toggle('open'); });
+document.getElementById('info-panel-close').addEventListener('click', () => { infoPanel.classList.remove('open'); });
 
 // Skärmpositionen (data-id → rect) för alla synliga rutor just nu — tas
 // innan en omritning så vi kan animera dem från sin gamla till sin nya
