@@ -686,43 +686,107 @@ function getVisibleRoots() {
 }
 
 const LEAF_H = 90, LEAF_GAP = 14;
+// En chef med GRID_MIN eller fler direkta rapporter läggs ut som ett
+// GRID_COLS-kolumners rutnät istället för en rad/vertikal lista.
+const GRID_MIN = 9, GRID_COLS = 3;
 
 function isLeafNode(id) { return getChildren(id).length === 0; }
 
+// Bredden (i px) en nods egna, expanderade undergren upptar.
 function computeSubtreeWidth(id) {
   const ch = getChildren(id);
   if (!expanded.has(id) || !ch.length) return NODE_W;
-  // If all children are leaves, they stack vertically → width = NODE_W
+  if (ch.length >= GRID_MIN) return gridDimensions(ch).width;
+  // Om alla barn är slutnoder staplas de vertikalt → bredd = NODE_W
   const allLeaves = ch.every(c => isLeafNode(c.id));
   if (allLeaves) return NODE_W;
   const total = ch.reduce((s, c) => s + computeSubtreeWidth(c.id), 0);
   return Math.max(NODE_W, total + H_GAP * (ch.length - 1));
 }
 
+// Höjden (i px, huvud-nod → djupaste expanderade ättling) en nods egna gren tar.
+function computeSubtreeHeight(id) {
+  const ch = getChildren(id);
+  if (!expanded.has(id) || !ch.length) return NODE_H;
+  if (ch.length >= GRID_MIN) return NODE_H + V_GAP + gridDimensions(ch).height;
+  const allLeaves = ch.every(c => isLeafNode(c.id));
+  if (allLeaves) return NODE_H + V_GAP + ch.length * LEAF_H + (ch.length - 1) * LEAF_GAP;
+  const maxChildH = Math.max(...ch.map(c => computeSubtreeHeight(c.id)));
+  return NODE_H + V_GAP + maxChildH;
+}
+
+// Kolumnbredder, radhöjder och total bredd/höjd för ett GRID_COLS-rutnät av `children`.
+function gridDimensions(children) {
+  const cols = Math.min(GRID_COLS, children.length);
+  const rows = Math.ceil(children.length / cols);
+  const colWidths = new Array(cols).fill(NODE_W);
+  const rowHeights = new Array(rows).fill(NODE_H);
+  children.forEach((c, i) => {
+    const col = i % cols, row = Math.floor(i / cols);
+    colWidths[col] = Math.max(colWidths[col], computeSubtreeWidth(c.id));
+    rowHeights[row] = Math.max(rowHeights[row], computeSubtreeHeight(c.id));
+  });
+  const width = colWidths.reduce((s, w) => s + w, 0) + H_GAP * (cols - 1);
+  const height = rowHeights.reduce((s, h) => s + h, 0) + V_GAP * (rows - 1);
+  return { cols, rows, colWidths, rowHeights, width, height };
+}
+
 function computeLayout() {
   const pos = {};
-  function place(nodes, depth, startX) {
-    let cursor = startX;
+
+  // Lägger ut `nodes` i en horisontell rad med start i (x0, y0); varje nods
+  // egna gren (rad, vertikal stapel eller rutnät) hamnar under noden.
+  function place(nodes, x0, y0) {
+    let cursor = x0;
     for (const n of nodes) {
       const ch = getChildren(n.id);
       const isExp = expanded.has(n.id);
-      const allLeaves = ch.length > 0 && ch.every(c => isLeafNode(c.id));
       const sw = (isExp && ch.length) ? computeSubtreeWidth(n.id) : NODE_W;
-      pos[n.id] = { x: cursor + sw / 2 - NODE_W / 2, y: depth * (NODE_H + V_GAP) };
-      if (isExp && ch.length) {
-        if (allLeaves) {
-          // Stack leaves vertically under parent
-          const leafX = cursor + sw / 2 - NODE_W / 2;
-          ch.forEach((c, i) => {
-            pos[c.id] = { x: leafX, y: depth * (NODE_H + V_GAP) + NODE_H + V_GAP + i * (LEAF_H + LEAF_GAP), isLeaf: true };
-          });
-        } else {
-          place(ch, depth + 1, cursor);
-        }
-      }
+      pos[n.id] = { x: cursor + sw / 2 - NODE_W / 2, y: y0 };
+      if (isExp && ch.length) placeChildren(ch, cursor, y0 + NODE_H + V_GAP, sw);
       cursor += sw + H_GAP;
     }
   }
+
+  // Lägger ut ett nods barn: rutnät (9+), vertikal stapel (alla slutnoder) eller rad.
+  function placeChildren(ch, x0, y0, sw) {
+    if (ch.length >= GRID_MIN) {
+      placeGrid(ch, x0, y0);
+      return;
+    }
+    const allLeaves = ch.every(c => isLeafNode(c.id));
+    if (allLeaves) {
+      const leafX = x0 + sw / 2 - NODE_W / 2;
+      ch.forEach((c, i) => {
+        pos[c.id] = { x: leafX, y: y0 + i * (LEAF_H + LEAF_GAP), isLeaf: true };
+      });
+    } else {
+      place(ch, x0, y0);
+    }
+  }
+
+  // Lägger ut `children` som ett GRID_COLS-kolumners rutnät med start i (x0, y0).
+  function placeGrid(children, x0, y0) {
+    const { cols, colWidths, rowHeights } = gridDimensions(children);
+    const colX = []; let cx = x0;
+    for (let c = 0; c < cols; c++) { colX.push(cx); cx += colWidths[c] + H_GAP; }
+    const rowY = []; let cy = y0;
+    for (let r = 0; r < rowHeights.length; r++) { rowY.push(cy); cy += rowHeights[r] + V_GAP; }
+
+    children.forEach((c, i) => {
+      const col = i % cols, row = Math.floor(i / cols);
+      const cellX = colX[col], cellY = rowY[row];
+      const ch2 = getChildren(c.id);
+      const isExp = expanded.has(c.id);
+      const sw = (isExp && ch2.length) ? computeSubtreeWidth(c.id) : NODE_W;
+      // Centrera noden i sin kolumn så att rutnätets kolumner hamnar i linje.
+      pos[c.id] = { x: cellX + colWidths[col] / 2 - NODE_W / 2, y: cellY };
+      if (isExp && ch2.length) {
+        placeChildren(ch2, cellX + colWidths[col] / 2 - sw / 2, cellY + NODE_H + V_GAP, sw);
+      }
+    });
+  }
+
   place(getVisibleRoots(), 0, 0);
   return pos;
 }
