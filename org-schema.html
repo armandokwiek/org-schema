@@ -742,25 +742,41 @@ function childrenBandHeight(id) {
   return Math.max(...ch.map(c => subtreeHeight(c.id)));
 }
 
-// Delar upp `children` i fasta övre rader (GRID_COLS breda) och en sista rad.
-// Chefer som är expanderade (och har egna underställda) räknas INTE med i de
-// övre raderna — de flyttas ner till sista raden istället, så de övre raderna
-// packas ihop utan hål när någon flyttas. Sista raden = de kvarvarande
-// personerna som hamnade sist där + de nedflyttade cheferna, sorterade efter
-// sin ursprungliga plats i nätet (vänster stannar till vänster, höger till
-// höger) så att flytten känns logisk istället för att hamna slumpmässigt.
+// Delar upp `children` i fasta rader/kolumner (GRID_COLS breda). En chef som
+// INTE sitter på sista raden och är expanderad flyttas ner till sista raden,
+// direkt till vänster om chefen som redan sitter i samma kolumn där (eller
+// längst bak om kolumnen saknar en). Rutan den lämnar blir tom — INGA andra
+// rutor flyttas eller packas om, för att hålla flytten minimal och lätt att
+// följa (bara den klickade rutan rör sig, plus att sista raden växer).
 function gridPack(children) {
   const cols = Math.min(GRID_COLS, children.length);
-  const withIndex = children.map((c, i) => ({ id: c.id, i }));
-  const moved = withIndex.filter(x => expanded.has(x.id) && getChildren(x.id).length);
-  const remaining = withIndex.filter(x => !(expanded.has(x.id) && getChildren(x.id).length));
-  const packedRows = remaining.length ? Math.ceil(remaining.length / cols) : 0;
-  const rows = Math.max(packedRows, 1);
-  const splitIdx = Math.max(packedRows - 1, 0) * cols;
-  const upper = remaining.slice(0, splitIdx).map(x => ({ id: x.id }));
-  const lastRowOriginal = remaining.slice(splitIdx);
-  const items = [...lastRowOriginal, ...moved].sort((a, b) => a.i - b.i).map(x => ({ id: x.id }));
-  return { cols, rows, upper, items };
+  const rows = Math.ceil(children.length / cols);
+  const lastRowIdx = rows - 1;
+
+  const grid = []; // grid[row][col] = barn, i ursprunglig ordning
+  children.forEach((c, i) => {
+    const row = Math.floor(i / cols), col = i % cols;
+    (grid[row] || (grid[row] = []))[col] = c;
+  });
+
+  const movedByCol = Array.from({ length: cols }, () => []);
+  const upperCells = [];
+  for (let r = 0; r < lastRowIdx; r++) {
+    for (let c = 0; c < cols; c++) {
+      const cell = grid[r] && grid[r][c]; if (!cell) continue;
+      if (expanded.has(cell.id) && getChildren(cell.id).length) movedByCol[c].push(cell);
+      else upperCells.push({ id: cell.id, row: r, col: c });
+    }
+  }
+
+  const lastRowCells = grid[lastRowIdx] || [];
+  const items = [];
+  for (let c = 0; c < cols; c++) {
+    movedByCol[c].forEach(cell => items.push({ id: cell.id }));
+    if (lastRowCells[c]) items.push({ id: lastRowCells[c].id });
+  }
+
+  return { cols, rows, upperCells, items };
 }
 
 function computeLayout() {
@@ -792,16 +808,16 @@ function computeLayout() {
   }
 
   // Lägger ut `children` som ett GRID_COLS-rutnät centrerat i `bandWidth`.
-  // Övre raderna får fasta, enhetliga celler. Sista raden (inkl. ev.
-  // nedflyttade chefer, se gridPack) läggs ut precis som en vanlig rad,
-  // med sin egen undergren direkt under varje ruta.
+  // Övre radernas rutor (upperCells) sitter kvar på sina fasta rad/kolumn-
+  // platser — en tom cell där en flyttad chef satt lämnas bara tom. Sista
+  // raden (inkl. ev. nedflyttade chefer, se gridPack) läggs ut som en vanlig
+  // rad, med sin egen undergren direkt under varje ruta.
   function placeGrid(children, x0, y0, bandWidth) {
-    const { cols, rows, upper, items } = gridPack(children);
+    const { cols, rows, upperCells, items } = gridPack(children);
     const gridWidth = cols * NODE_W + H_GAP * (cols - 1);
     const gridX0 = x0 + bandWidth / 2 - gridWidth / 2;
-    upper.forEach((c, i) => {
-      const col = i % cols, row = Math.floor(i / cols);
-      pos[c.id] = { x: gridX0 + col * (NODE_W + H_GAP), y: y0 + row * (NODE_H + V_GAP) };
+    upperCells.forEach(cell => {
+      pos[cell.id] = { x: gridX0 + cell.col * (NODE_W + H_GAP), y: y0 + cell.row * (NODE_H + V_GAP) };
     });
 
     const lastRowY = y0 + (rows - 1) * (NODE_H + V_GAP);
