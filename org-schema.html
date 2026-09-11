@@ -848,11 +848,19 @@ function computeLayout() {
       pos[cell.id] = { x: gridX0 + cell.col * (NODE_W + H_GAP), y: y0 + cell.row * (NODE_H + V_GAP) };
     });
 
+    // OBS: här sätts varje rutas x till EXAKT `cursor` (inte centrerat inom
+    // sin reserverade bredd) — annars skulle en flyttad chef med en egen
+    // bred undergren (t.ex. ett eget nästlat rutnät) hamna en bit in i sitt
+    // reserverade utrymme istället för exakt på platsen den skulle ta
+    // (den vakanta platsen där den ruta som knuffas åt sidan satt). Chefens
+    // egen undergren hänger då åt höger om rutan istället för centrerad
+    // under den — ett medvetet val för att garantera att själva rutan alltid
+    // hamnar rätt.
     const lastRowY = y0 + (rows - 1) * (NODE_H + V_GAP);
     let cursor = gridX0;
     items.forEach((it, i) => {
       const sw = widths[i];
-      pos[it.id] = { x: cursor + centerWidth(it.id) / 2 - NODE_W / 2, y: lastRowY };
+      pos[it.id] = { x: cursor, y: lastRowY };
       if (expanded.has(it.id) && getChildren(it.id).length) placeChildrenBand(getChildren(it.id), cursor, lastRowY + NODE_H + V_GAP, sw);
       cursor += sw + H_GAP;
     });
