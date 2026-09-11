@@ -737,21 +737,34 @@ function centerWidth(id) {
 function childrenBandWidth(id) {
   const ch = getChildren(id);
   if (ch.length >= GRID_MIN) {
-    const { cols, items } = gridPack(ch);
-    const gridWidth = cols * NODE_W + H_GAP * (cols - 1);
-    // Sista radens rutor sitter på FASTA steg (som rutnätets övriga rader),
-    // oavsett hur bred en enskild rutas egen undergren är — den bredden
-    // behövs bara under just den rutan, inte bredvid den i samma rad. Bara
-    // om en rutas egen gren faktiskt sticker ut längre än nästa fasta steg
-    // behöver vi reservera extra plats åt hela raden.
-    const rowWidth = items.length
-      ? Math.max(...items.map((it, i) => i * (NODE_W + H_GAP) + subtreeWidth(it.id)))
-      : 0;
-    return Math.max(gridWidth, rowWidth);
+    const gridWidth = Math.min(GRID_COLS, ch.length) * NODE_W + H_GAP * (Math.min(GRID_COLS, ch.length) - 1);
+    const { rightEdge } = layoutLastRowSlots(gridPack(ch).items);
+    return Math.max(gridWidth, rightEdge);
   }
   const allLeaves = ch.every(c => isLeafNode(c.id));
   if (allLeaves) return NODE_W;
   return ch.reduce((s, c) => s + subtreeWidth(c.id), 0) + H_GAP * (ch.length - 1);
+}
+
+// Beräknar var varje ruta i sista raden ska hamna (relativt gridX0=0):
+// normalt på sina FASTA steg (som rutnätets övriga rader), oavsett hur bred
+// en enskild rutas egen undergren är — den bredden gäller bara utrymmet
+// direkt under just den rutan. Men om en rutas centrerade undergren (eller
+// dess fasta steg) skulle krocka med grannens, knuffas den EXAKT så mycket
+// som behövs åt höger (och rutan följer med) — annars rör den sig inte.
+function layoutLastRowSlots(items) {
+  const widths = items.map(it => subtreeWidth(it.id));
+  const slots = [];
+  let prevRight = -Infinity;
+  items.forEach((it, i) => {
+    const sw = widths[i];
+    const overhang = Math.max(0, sw - NODE_W);
+    let left = i * (NODE_W + H_GAP) - overhang / 2;
+    if (left < prevRight + H_GAP) left = prevRight + H_GAP;
+    slots.push({ id: it.id, tileX: left + overhang / 2, childX0: left, sw });
+    prevRight = left + sw;
+  });
+  return { slots, rightEdge: items.length ? prevRight : 0 };
 }
 
 function childrenBandHeight(id) {
@@ -850,26 +863,19 @@ function computeLayout() {
     // ytterligare centrering, oavsett hur bred (den fulla) bandWidth råkar
     // vara just nu.
     const gridX0 = x0;
-    const widths = items.map(it => subtreeWidth(it.id));
     upperCells.forEach(cell => {
       pos[cell.id] = { x: gridX0 + cell.col * (NODE_W + H_GAP), y: y0 + cell.row * (NODE_H + V_GAP) };
     });
 
-    // Rutorna i sista raden placeras på FASTA steg (NODE_W+H_GAP), precis
-    // som i rutnätets övre rader — INTE förskjutna av hur bred en enskild
-    // rutas egen undergren är (den bredden gäller bara utrymmet DIREKT
-    // UNDER just den rutan; grannarna i samma rad behöver bara flytta sig
-    // ett steg åt gången). Rutans EGEN undergren centreras däremot precis
-    // som vanligt under rutan (kan alltså sticka ut åt båda hållen förbi
-    // grannarnas fasta steg om den är bred — se centrering nedan).
+    // Sista radens rutor: se layoutLastRowSlots — fasta steg som standard,
+    // undergrenen centrerad under rutan, och bara en knuff åt höger om två
+    // grannars centrerade grenar annars skulle krocka.
     const lastRowY = y0 + (rows - 1) * (NODE_H + V_GAP);
-    items.forEach((it, i) => {
-      const cursor = gridX0 + i * (NODE_W + H_GAP);
-      const sw = widths[i];
-      pos[it.id] = { x: cursor, y: lastRowY };
-      if (expanded.has(it.id) && getChildren(it.id).length) {
-        const childX0 = cursor - (sw - NODE_W) / 2;
-        placeChildrenBand(getChildren(it.id), childX0, lastRowY + NODE_H + V_GAP, sw);
+    const { slots } = layoutLastRowSlots(items);
+    slots.forEach(slot => {
+      pos[slot.id] = { x: gridX0 + slot.tileX, y: lastRowY };
+      if (expanded.has(slot.id) && getChildren(slot.id).length) {
+        placeChildrenBand(getChildren(slot.id), gridX0 + slot.childX0, lastRowY + NODE_H + V_GAP, slot.sw);
       }
     });
   }
