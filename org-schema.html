@@ -70,9 +70,6 @@
   .org-node:hover { border-color: var(--border-strong); }
   .org-node { border-left-width: 3px; border-left-style: solid; border-left-color: var(--border); }
   .org-node.is-root { border-left-width: 4px; }
-  .org-node.org-node-dup { border-style: dashed; background: var(--surface2); cursor: pointer; }
-  .org-node.org-node-dup:hover { border-color: var(--accent); }
-  .org-node-dup-badge { position: absolute; top: -9px; left: 10px; background: var(--accent); color: #fff; font-size: 9px; font-weight: 700; letter-spacing: 0.02em; padding: 1px 6px; border-radius: 8px; line-height: 1.5; }
   .org-node.is-leaf { width: 148px; padding: 9px 12px; cursor: default; min-height: 90px; box-sizing: border-box; }
   .org-node.is-leaf:hover { border-color: var(--border); }
   .leaf-group { position: absolute; display: flex; flex-direction: column; gap: 6px; }
@@ -697,11 +694,10 @@ function getVisibleRoots() {
 const LEAF_H = 90, LEAF_GAP = 14;
 // En chef med GRID_MIN eller fler direkta rapporter läggs ut som ett
 // GRID_COLS-kolumners rutnät av lika stora rutor istället för en rad/stapel.
-// Bara sista raden i nätet visar undergrenar direkt under sig (som vanligt).
-// Expanderar man en ruta högre upp i nätet läggs istället en KOPIA av den
-// rutan till i sista raden (balanserat vänster/höger om originalraden) —
-// grenen hamnar under kopian, så linjen dit blir kort och rak istället för
-// att dras tvärs genom hela nätet. Se gridBottomRow().
+// Bara sista raden i nätet visar undergrenar direkt under sig. Expanderar
+// man en ruta högre upp i nätet flyttas den rutan ner till sista raden (för
+// att grenen ska hamna direkt under den, med en kort rak linje) — och raden
+// den lämnade packas ihop utan hål. Se gridPack().
 const GRID_COLS = 3;
 let GRID_MIN = clampGridMin(parseInt(localStorage.getItem('orgchart-grid-min'), 10));
 function clampGridMin(n) { return Math.min(15, Math.max(3, Number.isFinite(n) ? n : 9)); }
@@ -725,7 +721,7 @@ function subtreeHeight(id) {
 function childrenBandWidth(id) {
   const ch = getChildren(id);
   if (ch.length >= GRID_MIN) {
-    const { cols, items } = gridBottomRow(ch);
+    const { cols, items } = gridPack(ch);
     const gridWidth = cols * NODE_W + H_GAP * (cols - 1);
     const rowWidth = items.reduce((s, it) => s + subtreeWidth(it.id), 0) + H_GAP * (items.length - 1);
     return Math.max(gridWidth, rowWidth);
@@ -738,7 +734,7 @@ function childrenBandWidth(id) {
 function childrenBandHeight(id) {
   const ch = getChildren(id);
   if (ch.length >= GRID_MIN) {
-    const { rows, items } = gridBottomRow(ch);
+    const { rows, items } = gridPack(ch);
     return (rows - 1) * (NODE_H + V_GAP) + Math.max(...items.map(it => subtreeHeight(it.id)));
   }
   const allLeaves = ch.every(c => isLeafNode(c.id));
@@ -746,29 +742,26 @@ function childrenBandHeight(id) {
   return Math.max(...ch.map(c => subtreeHeight(c.id)));
 }
 
-// Delar upp `children` i fasta övre rader (GRID_COLS breda, aldrig expanderade
-// på plats) och en sista rad. Sista raden = originalpersonerna där, plus en
-// kopia av varje expanderad chef längre upp i nätet — kopiorna fördelas
-// ungefär jämnt vänster/höger om originalraden för symmetri.
-function gridBottomRow(children) {
+// Delar upp `children` i fasta övre rader (GRID_COLS breda) och en sista rad.
+// Chefer som är expanderade (och har egna underställda) räknas INTE med i de
+// övre raderna — de flyttas ner till sista raden istället, så de övre raderna
+// packas ihop utan hål när någon flyttas. Sista raden = de kvarvarande
+// personerna som hamnade sist där + de nedflyttade cheferna, i ordning.
+function gridPack(children) {
   const cols = Math.min(GRID_COLS, children.length);
-  const rows = Math.ceil(children.length / cols);
-  const splitIdx = (rows - 1) * cols;
-  const upper = children.slice(0, splitIdx);
-  const lastRow = children.slice(splitIdx);
-  const expandedUpper = upper.filter(c => expanded.has(c.id) && getChildren(c.id).length);
-  const leftCount = Math.floor(expandedUpper.length / 2);
-  const items = [
-    ...expandedUpper.slice(0, leftCount).map(c => ({ id: c.id, dup: true, side: 'left' })),
-    ...lastRow.map(c => ({ id: c.id, dup: false })),
-    ...expandedUpper.slice(leftCount).map(c => ({ id: c.id, dup: true, side: 'right' })),
-  ];
+  const moved = children.filter(c => expanded.has(c.id) && getChildren(c.id).length);
+  const remaining = children.filter(c => !(expanded.has(c.id) && getChildren(c.id).length));
+  const packedRows = remaining.length ? Math.ceil(remaining.length / cols) : 0;
+  const rows = Math.max(packedRows, 1);
+  const splitIdx = Math.max(packedRows - 1, 0) * cols;
+  const upper = remaining.slice(0, splitIdx);
+  const lastRowOriginal = remaining.slice(splitIdx);
+  const items = [...lastRowOriginal, ...moved].map(c => ({ id: c.id }));
   return { cols, rows, upper, items };
 }
 
 function computeLayout() {
   const pos = {};
-  const duplicates = []; // { id, x, y } — en kopia i sista raden per expanderad chef högre upp i nätet
 
   // Lägger ut `nodes` i en horisontell rad med start i (x0, y0); varje nods
   // egna gren (rad, vertikal stapel eller rutnät) hamnar under noden.
@@ -796,11 +789,11 @@ function computeLayout() {
   }
 
   // Lägger ut `children` som ett GRID_COLS-rutnät centrerat i `bandWidth`.
-  // Övre raderna får fasta, enhetliga celler. Sista raden (inkl. ev. kopior,
-  // se gridBottomRow) läggs ut precis som en vanlig rad, med sin egen
-  // undergren direkt under varje ruta.
+  // Övre raderna får fasta, enhetliga celler. Sista raden (inkl. ev.
+  // nedflyttade chefer, se gridPack) läggs ut precis som en vanlig rad,
+  // med sin egen undergren direkt under varje ruta.
   function placeGrid(children, x0, y0, bandWidth) {
-    const { cols, rows, upper, items } = gridBottomRow(children);
+    const { cols, rows, upper, items } = gridPack(children);
     const gridWidth = cols * NODE_W + H_GAP * (cols - 1);
     const gridX0 = x0 + bandWidth / 2 - gridWidth / 2;
     upper.forEach((c, i) => {
@@ -814,16 +807,14 @@ function computeLayout() {
     let cursor = x0 + bandWidth / 2 - rowWidth / 2;
     items.forEach((it, i) => {
       const sw = widths[i];
-      const nodeX = cursor + sw / 2 - NODE_W / 2;
-      if (it.dup) duplicates.push({ id: it.id, x: nodeX, y: lastRowY, side: it.side, gridLeft: gridX0, gridRight: gridX0 + gridWidth });
-      else pos[it.id] = { x: nodeX, y: lastRowY };
+      pos[it.id] = { x: cursor + sw / 2 - NODE_W / 2, y: lastRowY };
       if (expanded.has(it.id) && getChildren(it.id).length) placeChildrenBand(getChildren(it.id), cursor, lastRowY + NODE_H + V_GAP, sw);
       cursor += sw + H_GAP;
     });
   }
 
   place(getVisibleRoots(), 0, 0);
-  return { pos, duplicates };
+  return pos;
 }
 
 function countConsultantsInSubtree(id) {
@@ -846,31 +837,27 @@ function updateTotalsWidget() {
 function render() {
   buildChildrenMap(); // Bygg O(n) cache innan O(n²)-funktioner körs
   computeBranchColors();
-  const { pos, duplicates } = computeLayout();
-  // Chefer som fått en kopia i sista raden i sitt rutnät: linjerna till deras
-  // underställda ska utgå från kopian (se render()-slutet), inte originalrutan.
-  const dupByMgr = new Map(duplicates.map(d => [d.id, d]));
+  const pos = computeLayout();
   canvasEl.querySelectorAll('.org-node').forEach(el => el.remove());
   while (linesEl.firstChild) linesEl.removeChild(linesEl.firstChild);
   emptyHint.style.display = people.length === 0 ? 'block' : 'none';
-  // Gruppera barnen per förälder (eller kopia) och rita en trädkoppling:
-  // en gemensam stam rakt ner, en tvärbalk, och raka droppar till varje
-  // barn — istället för att varje barn drar sin egen linje direkt från
-  // föräldern, vilket blir spretigt när flera barn delar förälder.
+  // Gruppera barnen per förälder och rita en trädkoppling: en gemensam stam
+  // rakt ner, en tvärbalk, och raka droppar till varje barn — istället för
+  // att varje barn drar sin egen linje direkt från föräldern, vilket blir
+  // spretigt när flera barn delar förälder.
   const BEND = 28;
   const lineGroups = new Map(); // par-objekt (referens) → { x, y, children:[{x,y}] }
   for (const p of people) {
     const pp = pos[p.id]; if (!pp) continue;
     if (p.mgr === null || p.mgr === undefined) continue;
-    const par = dupByMgr.get(p.mgr) || pos[p.mgr]; if (!par) continue;
+    const par = pos[p.mgr]; if (!par) continue;
     if (!lineGroups.has(par)) lineGroups.set(par, { x: par.x + NODE_W/2, y: par.y + NODE_H, children: [] });
     lineGroups.get(par).children.push({ x: pp.x + NODE_W/2, y: pp.y });
   }
-  function drawLine(d, dashed) {
+  function drawLine(d) {
     const path = document.createElementNS('http://www.w3.org/2000/svg','path');
     path.setAttribute('d', d);
     path.setAttribute('fill','none'); path.setAttribute('stroke','var(--border-strong)'); path.setAttribute('stroke-width','1');
-    if (dashed) path.setAttribute('stroke-dasharray', '4 3');
     linesEl.appendChild(path);
   }
   lineGroups.forEach(g => {
@@ -881,21 +868,6 @@ function render() {
     drawLine(`M${g.x},${g.y} L${g.x},${busY}`); // stam
     if (maxX > minX) drawLine(`M${minX},${busY} L${maxX},${busY}`); // tvärbalk
     g.children.forEach(c => drawLine(`M${c.x},${busY} L${c.x},${c.y}`)); // droppar
-  });
-  // Streckad linje från originalrutan i nätet till dess kopia i sista raden.
-  // Går runt rutnätet (upp i mellanrummet ovanför originalets rad, ut till
-  // en sida av nätet, ner till kopians rad) istället för rakt genom andra
-  // rutor, så det syns tydligt vilken kopia som hör till vilken chef.
-  const DUP_GAP = 12, DUP_SIDE_PAD = 16;
-  duplicates.forEach(dup => {
-    const orig = pos[dup.id]; if (!orig) return;
-    const origX = orig.x + NODE_W/2, origTopY = orig.y - DUP_GAP;
-    const dupX = dup.x + NODE_W/2, dupTopY = dup.y - DUP_GAP;
-    const channelX = dup.side === 'left' ? dup.gridLeft - DUP_SIDE_PAD : dup.gridRight + DUP_SIDE_PAD;
-    drawLine(
-      `M${origX},${orig.y} L${origX},${origTopY} L${channelX},${origTopY} L${channelX},${dupTopY} L${dupX},${dupTopY} L${dupX},${dup.y}`,
-      true
-    );
   });
   let maxX = 0, maxY = 0;
   for (const p of people) {
@@ -958,29 +930,6 @@ function render() {
       dot.title = p.tags.join(', ');
       div.appendChild(dot);
     }
-    canvasEl.appendChild(div);
-  }
-  // Kopior i sista raden av ett rutnät (se computeLayout/gridBottomRow): en
-  // förenklad, streckad ruta rakt ovanför sin gren, så linjen dit blir kort.
-  for (const dup of duplicates) {
-    const p = people.find(x => x.id === dup.id); if (!p) continue;
-    maxX = Math.max(maxX, dup.x + NODE_W); maxY = Math.max(maxY, dup.y + NODE_H);
-    const div = document.createElement('div');
-    div.className = 'org-node org-node-dup';
-    div.style.position = 'absolute';
-    div.style.left = dup.x+'px'; div.style.top = dup.y+'px'; div.dataset.id = p.id;
-    const bc = getBranchColor(p.id);
-    div.style.borderLeftColor = bc.text;
-    div.innerHTML =
-      `<div class="org-node-dup-badge">↧ kopia</div>` +
-      `<div style="min-width:0;flex:1">` +
-        `<div class="n-name">${esc(p.name)}</div>` +
-        (p.sub?`<div class="n-sub">${esc(p.sub)}</div>`:'') +
-        (p.title?`<span class="n-title">${esc(p.title)}</span>`:'') +
-      `</div>`;
-    div.addEventListener('click', e => { e.stopPropagation(); toggleExpand(p.id); });
-    div.addEventListener('mouseenter', e => showTooltip(p, e));
-    div.addEventListener('mouseleave', () => { tooltip.style.opacity = '0'; });
     canvasEl.appendChild(div);
   }
   linesEl.style.width = canvasEl.style.width = (maxX+100)+'px';
@@ -2114,7 +2063,7 @@ function activateMatch() {
   }
   render();
   // Pan canvas to center on match
-  const { pos } = computeLayout();
+  const pos = computeLayout();
   const pp = pos[p.id]; if (!pp) return;
   const wr = wrap.getBoundingClientRect();
   tx = wr.width/2 - (pp.x + 80)*scale;
