@@ -853,20 +853,34 @@ function render() {
   canvasEl.querySelectorAll('.org-node').forEach(el => el.remove());
   while (linesEl.firstChild) linesEl.removeChild(linesEl.firstChild);
   emptyHint.style.display = people.length === 0 ? 'block' : 'none';
+  // Gruppera barnen per förälder (eller kopia) och rita en trädkoppling:
+  // en gemensam stam rakt ner, en tvärbalk, och raka droppar till varje
+  // barn — istället för att varje barn drar sin egen linje direkt från
+  // föräldern, vilket blir spretigt när flera barn delar förälder.
+  const BEND = 28;
+  const lineGroups = new Map(); // par-objekt (referens) → { x, y, children:[{x,y}] }
   for (const p of people) {
     const pp = pos[p.id]; if (!pp) continue;
-    if (p.mgr !== null && p.mgr !== undefined) {
-      const par = dupByMgr.get(p.mgr) || pos[p.mgr]; if (!par) continue;
-      const x1 = par.x + NODE_W/2, y1 = par.y + NODE_H, x2 = pp.x + NODE_W/2, y2 = pp.y;
-      // Böj bara ut ur föräldern (kort kurva ner till barnets x-position),
-      // resten av linjen ner till barnet är sedan helt rak.
-      const bendY = y1 + Math.min(28, (y2 - y1) / 2);
-      const path = document.createElementNS('http://www.w3.org/2000/svg','path');
-      path.setAttribute('d',`M${x1},${y1} Q${x1},${bendY} ${x2},${bendY} L${x2},${y2}`);
-      path.setAttribute('fill','none'); path.setAttribute('stroke','var(--border-strong)'); path.setAttribute('stroke-width','1');
-      linesEl.appendChild(path);
-    }
+    if (p.mgr === null || p.mgr === undefined) continue;
+    const par = dupByMgr.get(p.mgr) || pos[p.mgr]; if (!par) continue;
+    if (!lineGroups.has(par)) lineGroups.set(par, { x: par.x + NODE_W/2, y: par.y + NODE_H, children: [] });
+    lineGroups.get(par).children.push({ x: pp.x + NODE_W/2, y: pp.y });
   }
+  function drawLine(d) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d', d);
+    path.setAttribute('fill','none'); path.setAttribute('stroke','var(--border-strong)'); path.setAttribute('stroke-width','1');
+    linesEl.appendChild(path);
+  }
+  lineGroups.forEach(g => {
+    const nearestChildY = Math.min(...g.children.map(c => c.y));
+    const busY = g.y + Math.min(BEND, nearestChildY - g.y);
+    const xs = g.children.map(c => c.x);
+    const minX = Math.min(g.x, ...xs), maxX = Math.max(g.x, ...xs);
+    drawLine(`M${g.x},${g.y} L${g.x},${busY}`); // stam
+    if (maxX > minX) drawLine(`M${minX},${busY} L${maxX},${busY}`); // tvärbalk
+    g.children.forEach(c => drawLine(`M${c.x},${busY} L${c.x},${c.y}`)); // droppar
+  });
   let maxX = 0, maxY = 0;
   for (const p of people) {
     const pp = pos[p.id]; if (!pp) continue;
