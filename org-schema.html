@@ -746,17 +746,20 @@ function childrenBandHeight(id) {
 // Chefer som är expanderade (och har egna underställda) räknas INTE med i de
 // övre raderna — de flyttas ner till sista raden istället, så de övre raderna
 // packas ihop utan hål när någon flyttas. Sista raden = de kvarvarande
-// personerna som hamnade sist där + de nedflyttade cheferna, i ordning.
+// personerna som hamnade sist där + de nedflyttade cheferna, sorterade efter
+// sin ursprungliga plats i nätet (vänster stannar till vänster, höger till
+// höger) så att flytten känns logisk istället för att hamna slumpmässigt.
 function gridPack(children) {
   const cols = Math.min(GRID_COLS, children.length);
-  const moved = children.filter(c => expanded.has(c.id) && getChildren(c.id).length);
-  const remaining = children.filter(c => !(expanded.has(c.id) && getChildren(c.id).length));
+  const withIndex = children.map((c, i) => ({ id: c.id, i }));
+  const moved = withIndex.filter(x => expanded.has(x.id) && getChildren(x.id).length);
+  const remaining = withIndex.filter(x => !(expanded.has(x.id) && getChildren(x.id).length));
   const packedRows = remaining.length ? Math.ceil(remaining.length / cols) : 0;
   const rows = Math.max(packedRows, 1);
   const splitIdx = Math.max(packedRows - 1, 0) * cols;
-  const upper = remaining.slice(0, splitIdx);
+  const upper = remaining.slice(0, splitIdx).map(x => ({ id: x.id }));
   const lastRowOriginal = remaining.slice(splitIdx);
-  const items = [...lastRowOriginal, ...moved].map(c => ({ id: c.id }));
+  const items = [...lastRowOriginal, ...moved].sort((a, b) => a.i - b.i).map(x => ({ id: x.id }));
   return { cols, rows, upper, items };
 }
 
@@ -1107,7 +1110,37 @@ function removePerson(id) {
   refreshMgrSelect(); render(); renderFilterPanel(); markDirty();
 }
 
+// Skärmpositionen (data-id → rect) för alla synliga rutor just nu — tas
+// innan en omritning så vi kan animera dem från sin gamla till sin nya
+// plats istället för att de bara hoppar dit direkt.
+function captureNodeRects() {
+  const map = new Map();
+  canvasEl.querySelectorAll('.org-node[data-id]').forEach(el => map.set(el.dataset.id, el.getBoundingClientRect()));
+  return map;
+}
+
+// Flyttar varje ruta som fanns innan (och fortfarande finns) från sin gamla
+// skärmposition till sin nya med en kort, enkel glid-animation.
+function animateFromRects(prevRects) {
+  if (!prevRects || !prevRects.size) return;
+  canvasEl.querySelectorAll('.org-node[data-id]').forEach(el => {
+    const old = prevRects.get(el.dataset.id); if (!old) return;
+    const cur = el.getBoundingClientRect();
+    const dx = (old.left - cur.left) / scale, dy = (old.top - cur.top) / scale;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+    el.style.transition = 'none';
+    el.style.transform = `translate(${dx}px, ${dy}px)`;
+    requestAnimationFrame(() => {
+      el.style.transition = 'transform 160ms ease';
+      el.style.transform = '';
+      el.addEventListener('transitionend', () => { el.style.transition = ''; }, { once: true });
+    });
+  });
+}
+
 function toggleExpand(id) {
+  const prevRects = captureNodeRects();
+
   // Anchor on the PARENT's on-screen position, not the clicked node's own —
   // toggling a node never moves its parent (the parent's position only
   // depends on what's above/before it), whereas the node itself can jump
@@ -1131,6 +1164,7 @@ function toggleExpand(id) {
       applyTransform();
     }
   }
+  animateFromRects(prevRects);
   saveData();
 }
 function collapseSubtree(id) { expanded.delete(id); getChildren(id).forEach(c=>collapseSubtree(c.id)); }
