@@ -70,6 +70,9 @@
   .org-node:hover { border-color: var(--border-strong); }
   .org-node { border-left-width: 3px; border-left-style: solid; border-left-color: var(--border); }
   .org-node.is-root { border-left-width: 4px; }
+  .org-node.org-node-dup { border-style: dashed; background: var(--surface2); cursor: pointer; }
+  .org-node.org-node-dup:hover { border-color: var(--accent); }
+  .org-node-dup-badge { position: absolute; top: -9px; left: 10px; background: var(--accent); color: #fff; font-size: 9px; font-weight: 700; letter-spacing: 0.02em; padding: 1px 6px; border-radius: 8px; line-height: 1.5; }
   .org-node.is-leaf { width: 148px; padding: 9px 12px; cursor: default; min-height: 90px; box-sizing: border-box; }
   .org-node.is-leaf:hover { border-color: var(--border); }
   .leaf-group { position: absolute; display: flex; flex-direction: column; gap: 6px; }
@@ -687,108 +690,131 @@ function getVisibleRoots() {
 
 const LEAF_H = 90, LEAF_GAP = 14;
 // En chef med GRID_MIN eller fler direkta rapporter läggs ut som ett
-// GRID_COLS-kolumners rutnät istället för en rad/vertikal lista.
-const GRID_MIN = 9, GRID_COLS = 3;
+// GRID_COLS-kolumners rutnät av lika stora rutor istället för en rad/stapel.
+// Expanderar man en av rutorna i nätet hamnar INTE dess undergren i cellen
+// (då skulle raderna bli ojämna) — istället flyttas den ner till en egen
+// sektion under hela rutnätet, en grupp per expanderad chef i nätet.
+const GRID_MIN = 9, GRID_COLS = 3, DETACH_GAP = V_GAP + 40, GROUP_GAP = H_GAP * 3;
 
 function isLeafNode(id) { return getChildren(id).length === 0; }
 
-// Bredden (i px) en nods egna, expanderade undergren upptar.
-function computeSubtreeWidth(id) {
+// Bredden (i px) en nods egen tile + dess expanderade undergren, om någon.
+function subtreeWidth(id) {
+  if (!expanded.has(id) || !getChildren(id).length) return NODE_W;
+  return Math.max(NODE_W, childrenBandWidth(id));
+}
+
+// Höjden (i px) en nods egen tile + dess expanderade undergren, om någon.
+function subtreeHeight(id) {
+  if (!expanded.has(id) || !getChildren(id).length) return NODE_H;
+  return NODE_H + V_GAP + childrenBandHeight(id);
+}
+
+// Bredden en nods BARN (utan noden själv) upptar: rad, vertikal stapel av
+// slutnoder, eller rutnät (+ ev. utflyttad sektion om något i nätet är expanderat).
+function childrenBandWidth(id) {
   const ch = getChildren(id);
-  if (!expanded.has(id) || !ch.length) return NODE_W;
-  if (ch.length >= GRID_MIN) return gridDimensions(ch).width;
-  // Om alla barn är slutnoder staplas de vertikalt → bredd = NODE_W
+  if (ch.length >= GRID_MIN) return Math.max(gridDimensions(ch).width, detachedDimensions(ch).width);
   const allLeaves = ch.every(c => isLeafNode(c.id));
   if (allLeaves) return NODE_W;
-  const total = ch.reduce((s, c) => s + computeSubtreeWidth(c.id), 0);
-  return Math.max(NODE_W, total + H_GAP * (ch.length - 1));
+  return ch.reduce((s, c) => s + subtreeWidth(c.id), 0) + H_GAP * (ch.length - 1);
 }
 
-// Höjden (i px, huvud-nod → djupaste expanderade ättling) en nods egna gren tar.
-function computeSubtreeHeight(id) {
+function childrenBandHeight(id) {
   const ch = getChildren(id);
-  if (!expanded.has(id) || !ch.length) return NODE_H;
-  if (ch.length >= GRID_MIN) return NODE_H + V_GAP + gridDimensions(ch).height;
+  if (ch.length >= GRID_MIN) {
+    const g = gridDimensions(ch), d = detachedDimensions(ch);
+    return g.height + (d.height > 0 ? DETACH_GAP + d.height : 0);
+  }
   const allLeaves = ch.every(c => isLeafNode(c.id));
-  if (allLeaves) return NODE_H + V_GAP + ch.length * LEAF_H + (ch.length - 1) * LEAF_GAP;
-  const maxChildH = Math.max(...ch.map(c => computeSubtreeHeight(c.id)));
-  return NODE_H + V_GAP + maxChildH;
+  if (allLeaves) return ch.length * LEAF_H + (ch.length - 1) * LEAF_GAP;
+  return Math.max(...ch.map(c => subtreeHeight(c.id)));
 }
 
-// Kolumnbredder, radhöjder och total bredd/höjd för ett GRID_COLS-rutnät av `children`.
+// Höjden på en utflyttad grupp: en kopia av chefens ruta (ankare för
+// linjerna till underställda, se computeLayout/placeGridWithDetached) + grenen.
+
+// Rutnätets egen storlek: alltid enhetliga NODE_W×NODE_H-rutor, oavsett om
+// någon av rutorna är expanderad (den undergrenen hamnar i den utflyttade sektionen).
 function gridDimensions(children) {
   const cols = Math.min(GRID_COLS, children.length);
   const rows = Math.ceil(children.length / cols);
-  const colWidths = new Array(cols).fill(NODE_W);
-  const rowHeights = new Array(rows).fill(NODE_H);
-  children.forEach((c, i) => {
-    const col = i % cols, row = Math.floor(i / cols);
-    colWidths[col] = Math.max(colWidths[col], computeSubtreeWidth(c.id));
-    rowHeights[row] = Math.max(rowHeights[row], computeSubtreeHeight(c.id));
-  });
-  const width = colWidths.reduce((s, w) => s + w, 0) + H_GAP * (cols - 1);
-  const height = rowHeights.reduce((s, h) => s + h, 0) + V_GAP * (rows - 1);
-  return { cols, rows, colWidths, rowHeights, width, height };
+  return { cols, rows, width: cols * NODE_W + H_GAP * (cols - 1), height: rows * NODE_H + V_GAP * (rows - 1) };
+}
+
+// Vilka av rutnätets barn som just nu är expanderade och har egna underställda.
+function expandedGridChildren(children) { return children.filter(c => expanded.has(c.id) && getChildren(c.id).length); }
+
+// Storleken på den utflyttade sektionen: en grupp per expanderad ruta i nätet,
+// placerade sida vid sida under hela rutnätet. Varje grupp inleds med en
+// kopia av chefens ruta (se placeGridWithDetached) så linjerna till de
+// underställda blir korta och entydiga istället för att korsa hela nätet.
+function detachedDimensions(children) {
+  const groups = expandedGridChildren(children);
+  if (!groups.length) return { width: 0, height: 0 };
+  const widths = groups.map(c => Math.max(NODE_W, childrenBandWidth(c.id)));
+  return {
+    width: widths.reduce((s, w) => s + w, 0) + GROUP_GAP * (groups.length - 1),
+    height: NODE_H + V_GAP + Math.max(...groups.map(c => childrenBandHeight(c.id))),
+  };
 }
 
 function computeLayout() {
   const pos = {};
+  const duplicates = []; // { id, x, y } — en kopia av rutan per utflyttad grupp
 
   // Lägger ut `nodes` i en horisontell rad med start i (x0, y0); varje nods
   // egna gren (rad, vertikal stapel eller rutnät) hamnar under noden.
   function place(nodes, x0, y0) {
     let cursor = x0;
     for (const n of nodes) {
-      const ch = getChildren(n.id);
-      const isExp = expanded.has(n.id);
-      const sw = (isExp && ch.length) ? computeSubtreeWidth(n.id) : NODE_W;
+      const sw = subtreeWidth(n.id);
       pos[n.id] = { x: cursor + sw / 2 - NODE_W / 2, y: y0 };
-      if (isExp && ch.length) placeChildren(ch, cursor, y0 + NODE_H + V_GAP, sw);
+      if (expanded.has(n.id) && getChildren(n.id).length) placeChildrenBand(getChildren(n.id), cursor, y0 + NODE_H + V_GAP, sw);
       cursor += sw + H_GAP;
     }
   }
 
-  // Lägger ut ett nods barn: rutnät (9+), vertikal stapel (alla slutnoder) eller rad.
-  function placeChildren(ch, x0, y0, sw) {
-    if (ch.length >= GRID_MIN) {
-      placeGrid(ch, x0, y0);
-      return;
-    }
+  // Lägger ut ett nods barn inom bredden `bandWidth` som börjar vid x0:
+  // rutnät (9+), vertikal stapel (alla slutnoder) eller rad.
+  function placeChildrenBand(ch, x0, y0, bandWidth) {
+    if (ch.length >= GRID_MIN) { placeGridWithDetached(ch, x0, y0, bandWidth); return; }
     const allLeaves = ch.every(c => isLeafNode(c.id));
     if (allLeaves) {
-      const leafX = x0 + sw / 2 - NODE_W / 2;
-      ch.forEach((c, i) => {
-        pos[c.id] = { x: leafX, y: y0 + i * (LEAF_H + LEAF_GAP), isLeaf: true };
-      });
+      const leafX = x0 + bandWidth / 2 - NODE_W / 2;
+      ch.forEach((c, i) => { pos[c.id] = { x: leafX, y: y0 + i * (LEAF_H + LEAF_GAP), isLeaf: true }; });
     } else {
       place(ch, x0, y0);
     }
   }
 
-  // Lägger ut `children` som ett GRID_COLS-kolumners rutnät med start i (x0, y0).
-  function placeGrid(children, x0, y0) {
-    const { cols, colWidths, rowHeights } = gridDimensions(children);
-    const colX = []; let cx = x0;
-    for (let c = 0; c < cols; c++) { colX.push(cx); cx += colWidths[c] + H_GAP; }
-    const rowY = []; let cy = y0;
-    for (let r = 0; r < rowHeights.length; r++) { rowY.push(cy); cy += rowHeights[r] + V_GAP; }
-
+  // Lägger ut `children` som ett enhetligt GRID_COLS-rutnät centrerat i `bandWidth`,
+  // och lägger ev. expanderade rutors undergrenar i en sektion under hela nätet.
+  function placeGridWithDetached(children, x0, y0, bandWidth) {
+    const g = gridDimensions(children);
+    const gridX0 = x0 + bandWidth / 2 - g.width / 2;
     children.forEach((c, i) => {
-      const col = i % cols, row = Math.floor(i / cols);
-      const cellX = colX[col], cellY = rowY[row];
-      const ch2 = getChildren(c.id);
-      const isExp = expanded.has(c.id);
-      const sw = (isExp && ch2.length) ? computeSubtreeWidth(c.id) : NODE_W;
-      // Centrera noden i sin kolumn så att rutnätets kolumner hamnar i linje.
-      pos[c.id] = { x: cellX + colWidths[col] / 2 - NODE_W / 2, y: cellY };
-      if (isExp && ch2.length) {
-        placeChildren(ch2, cellX + colWidths[col] / 2 - sw / 2, cellY + NODE_H + V_GAP, sw);
-      }
+      const col = i % g.cols, row = Math.floor(i / g.cols);
+      pos[c.id] = { x: gridX0 + col * (NODE_W + H_GAP), y: y0 + row * (NODE_H + V_GAP) };
+    });
+
+    const groups = expandedGridChildren(children);
+    if (!groups.length) return;
+    const d = detachedDimensions(children);
+    const detailY = y0 + g.height + DETACH_GAP;
+    let cursor = x0 + bandWidth / 2 - d.width / 2;
+    groups.forEach(c => {
+      const w = Math.max(NODE_W, childrenBandWidth(c.id));
+      // Kopia av chefens ruta som grupp-rubrik — linjerna till de underställda
+      // utgår härifrån istället för från originalrutan uppe i rutnätet.
+      duplicates.push({ id: c.id, x: cursor + w / 2 - NODE_W / 2, y: detailY });
+      placeChildrenBand(getChildren(c.id), cursor, detailY + NODE_H + V_GAP, w);
+      cursor += w + GROUP_GAP;
     });
   }
 
   place(getVisibleRoots(), 0, 0);
-  return pos;
+  return { pos, duplicates };
 }
 
 function countConsultantsInSubtree(id) {
@@ -811,14 +837,18 @@ function updateTotalsWidget() {
 function render() {
   buildChildrenMap(); // Bygg O(n) cache innan O(n²)-funktioner körs
   computeBranchColors();
-  const pos = computeLayout();
+  const { pos, duplicates } = computeLayout();
+  // Chefer som är utflyttade grupp-huvuden i rutnätet: linjerna till deras
+  // underställda ska utgå från kopian (se render()-slutet), inte originalrutan.
+  const dupByMgr = new Map(duplicates.map(d => [d.id, d]));
+  const dupIds = new Set(duplicates.map(d => d.id));
   canvasEl.querySelectorAll('.org-node').forEach(el => el.remove());
   while (linesEl.firstChild) linesEl.removeChild(linesEl.firstChild);
   emptyHint.style.display = people.length === 0 ? 'block' : 'none';
   for (const p of people) {
     const pp = pos[p.id]; if (!pp) continue;
     if (p.mgr !== null && p.mgr !== undefined) {
-      const par = pos[p.mgr]; if (!par) continue;
+      const par = dupByMgr.get(p.mgr) || pos[p.mgr]; if (!par) continue;
       const x1 = par.x + NODE_W/2, y1 = par.y + NODE_H, x2 = pp.x + NODE_W/2, y2 = pp.y, my = (y1+y2)/2;
       const path = document.createElementNS('http://www.w3.org/2000/svg','path');
       path.setAttribute('d',`M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`);
@@ -845,7 +875,7 @@ function render() {
         (p.title?`<span class="n-title">${esc(p.title)}</span>`:'') +
         (p.seller?(()=>{ const sc=getSellerColor(p.seller); const ss=sc?` style="background:${safeColor(sc.bg)};color:${safeColor(sc.text)}"`:''; return `<span class="n-seller"${ss}>◈ ${esc(p.seller)}</span>`; })():'') +
       `</div>` +
-      (!isLeaf && ch.length?`<div class="n-expand">${isExp?'▾ '+ch.length+' report'+(ch.length>1?'s':''):'▸ '+ch.length+' below'}</div>`:'');
+      (!isLeaf && ch.length?`<div class="n-expand">${isExp?'▾ '+ch.length+' report'+(ch.length>1?'s':''):'▸ '+ch.length+' below'}${dupIds.has(p.id)?' ↓':''}</div>`:'');
     // Consultant button
     const hasC = (consultants[p.id]||[]).length > 0;
     const cCount = (consultants[p.id]||[]).length;
@@ -887,6 +917,29 @@ function render() {
       dot.title = p.tags.join(', ');
       div.appendChild(dot);
     }
+    canvasEl.appendChild(div);
+  }
+  // Kopior av grupp-huvuden i rutnätet (se computeLayout): en förenklad,
+  // streckad ruta rakt ovanför sin utflyttade gren, så linjerna dit blir korta.
+  for (const dup of duplicates) {
+    const p = people.find(x => x.id === dup.id); if (!p) continue;
+    maxX = Math.max(maxX, dup.x + NODE_W); maxY = Math.max(maxY, dup.y + NODE_H);
+    const div = document.createElement('div');
+    div.className = 'org-node org-node-dup';
+    div.style.position = 'absolute';
+    div.style.left = dup.x+'px'; div.style.top = dup.y+'px'; div.dataset.id = p.id;
+    const bc = getBranchColor(p.id);
+    div.style.borderLeftColor = bc.text;
+    div.innerHTML =
+      `<div class="org-node-dup-badge">↧ kopia</div>` +
+      `<div style="min-width:0;flex:1">` +
+        `<div class="n-name">${esc(p.name)}</div>` +
+        (p.sub?`<div class="n-sub">${esc(p.sub)}</div>`:'') +
+        (p.title?`<span class="n-title">${esc(p.title)}</span>`:'') +
+      `</div>`;
+    div.addEventListener('click', e => { e.stopPropagation(); toggleExpand(p.id); });
+    div.addEventListener('mouseenter', e => showTooltip(p, e));
+    div.addEventListener('mouseleave', () => { tooltip.style.opacity = '0'; });
     canvasEl.appendChild(div);
   }
   linesEl.style.width = canvasEl.style.width = (maxX+100)+'px';
@@ -2020,7 +2073,7 @@ function activateMatch() {
   }
   render();
   // Pan canvas to center on match
-  const pos = computeLayout();
+  const { pos } = computeLayout();
   const pp = pos[p.id]; if (!pp) return;
   const wr = wrap.getBoundingClientRect();
   tx = wr.width/2 - (pp.x + 80)*scale;
